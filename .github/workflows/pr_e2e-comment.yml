@@ -16,3 +16,24 @@ jobs:
           echo A comment on PR $NUMBER
         env:
           NUMBER: ${{ github.event.issue.number }}
+      - name: Send HTTP request
+        id: request
+        uses: tyrrrz/action-http-request@master
+        with:
+          url: https://api.enterprise.redhat.com/hydra/umb-bridge/v1/publish
+          method: POST
+          headers: |
+            Content-Type: application/json
+          body: |
+            {
+              "foo": "bar"
+            }
+          retry-count: 3
+          retry-delay: 500
+
+      - name: Print outputs
+        run: |
+          echo "Status: ${{ steps.request.outputs.status }}"
+          echo "Success: ${{ steps.request.outputs.success }}"
+          echo "Headers: ${{ steps.request.outputs.headers }}"
+          echo "Body: ${{ steps.request.outputs.body }}"
