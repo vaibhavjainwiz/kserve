@@ -9,7 +9,7 @@ jobs:
   pr_commented:
     # This job only runs for pull request comments
     name: PR comment
-    if: ${{ github.event.issue.pull_request && github.event.comment.body == "validate e2e" }}
+    if: ${{ github.event.issue.pull_request && github.event.comment.body == 'run e2e' }}
     runs-on: ubuntu-latest
     steps:
       - run: |
