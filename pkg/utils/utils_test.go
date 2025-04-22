@@ -24,6 +24,7 @@ import (
 	"github.com/kserve/kserve/pkg/credentials/gcs"
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/types"
+	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
@@ -540,4 +541,184 @@ func TestIsPrefixSupported(t *testing.T) {
 			g.Expect(res).Should(gomega.Equal(scenario.expected))
 		})
 	}
+}
+
+func TestGetEnvVarValue(t *testing.T) {
+	g := gomega.NewGomegaWithT(t)
+	scenarios := map[string]struct {
+		envList          []v1.EnvVar
+		targetEnvName    string
+		expectedEnvValue string
+		expectedExist    bool
+	}{
+		"EnvExist": {
+			envList: []v1.EnvVar{
+				{Name: "test-name", Value: "test-value"},
+			},
+			targetEnvName:    "test-name",
+			expectedEnvValue: "test-value",
+			expectedExist:    true,
+		},
+		"EnvDoesNotExist": {
+			envList: []v1.EnvVar{
+				{Name: "test-name", Value: "test-value"},
+			},
+			targetEnvName:    "wrong",
+			expectedEnvValue: "",
+			expectedExist:    false,
+		},
+	}
+
+	for name, scenario := range scenarios {
+		t.Run(name, func(t *testing.T) {
+			res, exists := GetEnvVarValue(scenario.envList, scenario.targetEnvName)
+			g.Expect(res).Should(gomega.Equal(scenario.expectedEnvValue))
+			g.Expect(exists).Should(gomega.Equal(scenario.expectedExist))
+		})
+	}
+}
+
+func TestIsUnknownGpuResourceType(t *testing.T) {
+	g := gomega.NewGomegaWithT(t)
+
+	scenarios := map[string]struct {
+		resources       v1.ResourceRequirements
+		expectedUnknown bool
+	}{
+		"OnlyBasicResources": {
+			resources: v1.ResourceRequirements{
+				Limits: v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse("1"),
+					v1.ResourceMemory: resource.MustParse("1Gi"),
+				},
+				Requests: v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse("1"),
+					v1.ResourceMemory: resource.MustParse("1Gi"),
+				},
+			},
+			expectedUnknown: false,
+		},
+		"ValidGpuResource": {
+			resources: v1.ResourceRequirements{
+				Limits: v1.ResourceList{
+					v1.ResourceCPU:                    resource.MustParse("1"),
+					v1.ResourceMemory:                 resource.MustParse("1Gi"),
+					v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+				},
+				Requests: v1.ResourceList{
+					v1.ResourceCPU:                    resource.MustParse("1"),
+					v1.ResourceMemory:                 resource.MustParse("1Gi"),
+					v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+				},
+			},
+			expectedUnknown: false,
+		},
+		"UnknownGpuResource": {
+			resources: v1.ResourceRequirements{
+				Limits: v1.ResourceList{
+					v1.ResourceCPU:                     resource.MustParse("1"),
+					v1.ResourceMemory:                  resource.MustParse("1Gi"),
+					v1.ResourceName("unknown.com/gpu"): resource.MustParse("1"),
+				},
+				Requests: v1.ResourceList{
+					v1.ResourceCPU:                     resource.MustParse("1"),
+					v1.ResourceMemory:                  resource.MustParse("1Gi"),
+					v1.ResourceName("unknown.com/gpu"): resource.MustParse("1"),
+				},
+			},
+			expectedUnknown: true,
+		},
+		"MixedResources": {
+			resources: v1.ResourceRequirements{
+				Limits: v1.ResourceList{
+					v1.ResourceCPU:                    resource.MustParse("1"),
+					v1.ResourceMemory:                 resource.MustParse("1Gi"),
+					v1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+				},
+				Requests: v1.ResourceList{
+					v1.ResourceCPU:                     resource.MustParse("1"),
+					v1.ResourceMemory:                  resource.MustParse("1Gi"),
+					v1.ResourceName("unknown.com/gpu"): resource.MustParse("1"),
+				},
+			},
+			expectedUnknown: true,
+		},
+		"EmptyResources": {
+			resources: v1.ResourceRequirements{
+				Limits:   v1.ResourceList{},
+				Requests: v1.ResourceList{},
+			},
+			expectedUnknown: false,
+		},
+	}
+
+	for name, scenario := range scenarios {
+		t.Run(name, func(t *testing.T) {
+			result := IsUnknownGpuResourceType(scenario.resources, "")
+			g.Expect(result).Should(gomega.Equal(scenario.expectedUnknown))
+		})
+	}
+}
+
+func TestIsValidCustomGPUArray(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"[]", false},
+		{"[\"item1\", \"item2\"]", true},
+		{"[\"item1\", \"item2\", \"item3\"]", true},
+		{"[\"item1\", \"item2\", \"\"]", false},
+		{"[\"item1\", 42]", false},
+		{"[\"item1\", \"item2\",]", false},
+		{"[\"item1\", \"item2\", \"item3\"", false},
+		{"[item1, item2]", false},
+		{"[\"item1\", \"item2\" \"item3\"]", false},
+		{"[\"item1\", null]", false},
+		{"[\"item1\", true]", false},
+		{"[\"item1\", false]", false},
+		{"[\"item1\", \"item2\", 42]", false},
+		{"[\"item1\", \"item2\", \"item3\", \"\"]", false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result := IsValidCustomGPUArray(test.input)
+			if result != test.expected {
+				t.Errorf("expected %v, got %v", test.expected, result)
+			}
+		})
+	}
+}
+
+func TestCheckEnvsToRemove(t *testing.T) {
+	current := []v1.EnvVar{
+		{Name: "env1", Value: "value1"},
+		{Name: "env2", Value: "value2"},
+		{Name: "env3", Value: "value3"},
+		{Name: "env4", Value: "delete"},
+	}
+	desired := []v1.EnvVar{
+		{Name: "env2", Value: "value2"},
+		{Name: "env4", Value: "delete"},
+	}
+
+	needsToBeRemoved := []v1.EnvVar{
+		{Name: "env1", Value: "env_marked_for_deletion"},
+		{Name: "env3", Value: "env_marked_for_deletion"},
+	}
+	removed, keep := CheckEnvsToRemove(desired, current)
+	assert.Equal(t, needsToBeRemoved, removed)
+	assert.Equal(t, desired, keep)
+
+	// resultant list should contain both envs with the delete marker and the envs that needs to be kept as it is
+	finalList := append(desired, needsToBeRemoved...)
+	expected := []v1.EnvVar{
+		{Name: "env2", Value: "value2"},
+		// the original value is "delete", so, it should be in the needs to  be removed list
+		{Name: "env4", Value: "delete"},
+		{Name: "env1", Value: "env_marked_for_deletion"},
+		{Name: "env3", Value: "env_marked_for_deletion"},
+	}
+	assert.Equal(t, expected, finalList)
 }

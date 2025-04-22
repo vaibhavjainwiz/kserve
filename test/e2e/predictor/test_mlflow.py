@@ -26,12 +26,13 @@ from kserve import (
 from kubernetes.client import V1ResourceRequirements
 import pytest
 
-from ..common.utils import predict
+from ..common.utils import predict_isvc
 from ..common.utils import KSERVE_TEST_NAMESPACE
 
 
 @pytest.mark.predictor
-def test_mlflow_v2_runtime_kserve():
+@pytest.mark.asyncio(scope="session")
+async def test_mlflow_v2_runtime_kserve(rest_v2_client):
     service_name = "isvc-mlflow-v2-runtime"
     protocol_version = "v2"
 
@@ -47,12 +48,18 @@ def test_mlflow_v2_runtime_kserve():
                 requests={"cpu": "50m", "memory": "128Mi"},
                 limits={"cpu": "1", "memory": "1Gi"},
             ),
+            readiness_probe=client.V1Probe(
+                http_get=client.V1HTTPGetAction(
+                    path=f"/v2/models/{service_name}/ready", port=8080
+                ),
+                initial_delay_seconds=30,
+            ),
         ),
     )
 
     isvc = V1beta1InferenceService(
         api_version=constants.KSERVE_V1BETA1,
-        kind=constants.KSERVE_KIND,
+        kind=constants.KSERVE_KIND_INFERENCESERVICE,
         metadata=client.V1ObjectMeta(
             name=service_name, namespace=KSERVE_TEST_NAMESPACE
         ),
@@ -64,9 +71,11 @@ def test_mlflow_v2_runtime_kserve():
     )
     kserve_client.create(isvc)
     kserve_client.wait_isvc_ready(service_name, namespace=KSERVE_TEST_NAMESPACE)
-    res = predict(
-        service_name, "./data/mlflow_input_v2.json", protocol_version=protocol_version
+    res = await predict_isvc(
+        rest_v2_client,
+        service_name,
+        "./data/mlflow_input_v2.json",
     )
-    assert res["outputs"][0]["data"] == [5.576883936610762]
+    assert res.outputs[0].data == [5.576883936610762]
 
     kserve_client.delete(service_name, KSERVE_TEST_NAMESPACE)

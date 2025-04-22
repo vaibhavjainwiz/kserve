@@ -25,7 +25,6 @@ import (
 
 // InferenceGraph is the Schema for the InferenceGraph API for multiple models
 // +k8s:openapi-gen=true
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +genclient
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
@@ -305,12 +304,13 @@ type InferenceGraphStatus struct {
 	// Url for the InferenceGraph
 	// +optional
 	URL *apis.URL `json:"url,omitempty"`
+	// InferenceGraph DeploymentMode
+	DeploymentMode string `json:"deploymentMode,omitempty"`
 }
 
 // InferenceGraphList contains a list of InferenceGraph
 // +k8s:openapi-gen=true
 // +kubebuilder:object:root=true
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type InferenceGraphList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

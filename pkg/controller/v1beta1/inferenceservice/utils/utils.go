@@ -26,25 +26,30 @@ import (
 	"sort"
 	"strings"
 
+	routev1 "github.com/openshift/api/route/v1"
+	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"knative.dev/pkg/apis"
+
+	"github.com/pkg/errors"
+	goerrors "github.com/pkg/errors"
+	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	"github.com/kserve/kserve/pkg/apis/serving/v1beta1"
-	v1beta1api "github.com/kserve/kserve/pkg/apis/serving/v1beta1"
 	"github.com/kserve/kserve/pkg/constants"
 	"github.com/kserve/kserve/pkg/utils"
 	"github.com/kserve/kserve/pkg/webhook/admission/pod"
-	goerrors "github.com/pkg/errors"
-	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Constants
 var (
-	SupportedStorageURIPrefixList = []string{"gs://", "s3://", "pvc://", "file://", "https://", "http://", "hdfs://", "webhdfs://", "oci://"}
+	SupportedStorageURIPrefixList = []string{"gs://", "s3://", "pvc://", "file://", "https://", "http://", "hdfs://", "webhdfs://", "oci://", "hf://"}
 )
 
 const (
@@ -54,7 +59,7 @@ const (
 
 // IsMMSPredictor Only enable MMS predictor when predictor config sets MMS to true and neither
 // storage uri nor storage spec is set
-func IsMMSPredictor(predictor *v1beta1api.PredictorSpec) bool {
+func IsMMSPredictor(predictor *v1beta1.PredictorSpec) bool {
 	if len(predictor.Containers) > 0 {
 		container := predictor.Containers[0]
 		for _, envVar := range container.Env {
@@ -74,7 +79,7 @@ func IsMMSPredictor(predictor *v1beta1api.PredictorSpec) bool {
 	}
 }
 
-func IsMemoryResourceAvailable(isvc *v1beta1api.InferenceService, totalReqMemory resource.Quantity) bool {
+func IsMemoryResourceAvailable(isvc *v1beta1.InferenceService, totalReqMemory resource.Quantity) bool {
 	if isvc.Spec.Predictor.GetExtensions() == nil || len(isvc.Spec.Predictor.GetImplementations()) == 0 {
 		return false
 	}
@@ -85,18 +90,31 @@ func IsMemoryResourceAvailable(isvc *v1beta1api.InferenceService, totalReqMemory
 	return predictorMemoryLimit.Cmp(totalReqMemory) >= 0
 }
 
+func getModelNameFromArgs(args []string) string {
+	modelName := ""
+	for i, arg := range args {
+		if strings.HasPrefix(arg, constants.ArgumentModelName) {
+			// Case 1: ["--model-name=<model-name>"]
+			modelNameValueArr := strings.Split(arg, "=")
+			if len(modelNameValueArr) == 2 {
+				modelName = modelNameValueArr[1]
+			}
+			// Case 2: ["--model-name", "<model-name>"]
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+				modelName = args[i+1]
+			}
+		}
+	}
+	return modelName
+}
+
 // GetModelName returns the model name for single model serving case
-func GetModelName(isvc *v1beta1api.InferenceService) string {
-	modelName := isvc.Name
+func GetModelName(isvc *v1beta1.InferenceService) string {
 	// Return model name from args for KServe custom model server if transformer presents
 	if isvc.Spec.Transformer != nil && len(isvc.Spec.Transformer.Containers) > 0 {
-		for _, arg := range isvc.Spec.Transformer.Containers[0].Args {
-			if strings.HasPrefix(arg, constants.ArgumentModelName) {
-				modelNameValueArr := strings.Split(arg, "=")
-				if len(modelNameValueArr) == 2 {
-					return modelNameValueArr[1]
-				}
-			}
+		modelName := getModelNameFromArgs(isvc.Spec.Transformer.Containers[0].Args)
+		if modelName != "" {
+			return modelName
 		}
 	}
 	if isvc.Spec.Predictor.Model != nil {
@@ -107,26 +125,19 @@ func GetModelName(isvc *v1beta1api.InferenceService) string {
 			}
 		}
 		// Return model name from args for tfserving or KServe model server
-		for _, arg := range isvc.Spec.Predictor.Model.Args {
-			if strings.HasPrefix(arg, constants.ArgumentModelName) {
-				modelNameValueArr := strings.Split(arg, "=")
-				if len(modelNameValueArr) == 2 {
-					return modelNameValueArr[1]
-				}
-			}
+		modelName := getModelNameFromArgs(isvc.Spec.Predictor.Model.Args)
+		if modelName != "" {
+			return modelName
 		}
 	} else if len(isvc.Spec.Predictor.Containers) > 0 {
 		// Return model name from args for KServe custom model server
-		for _, arg := range isvc.Spec.Predictor.Containers[0].Args {
-			if strings.HasPrefix(arg, constants.ArgumentModelName) {
-				modelNameValueArr := strings.Split(arg, "=")
-				if len(modelNameValueArr) == 2 {
-					return modelNameValueArr[1]
-				}
-			}
+		modelName := getModelNameFromArgs(isvc.Spec.Predictor.Containers[0].Args)
+		if modelName != "" {
+			return modelName
 		}
 	}
-	return modelName
+	// Return isvc name if model name is not found
+	return isvc.Name
 }
 
 // GetPredictorEndpoint returns the predictor endpoint if status.address.url is not nil else returns empty string with error.
@@ -167,12 +178,20 @@ case 2: serving.kserve.org/deploymentMode is set
 	        if the mode is "RawDeployment", "Serverless" or "ModelMesh", return it.
 			else return config.deploy.defaultDeploymentMode
 */
-func GetDeploymentMode(annotations map[string]string, deployConfig *v1beta1api.DeployConfig) constants.DeploymentModeType {
+func GetDeploymentMode(statusDeploymentMode string, annotations map[string]string, deployConfig *v1beta1.DeployConfig) constants.DeploymentModeType {
+	// First priority is the deploymentMode recorded in the status
+	if len(statusDeploymentMode) != 0 {
+		return constants.DeploymentModeType(statusDeploymentMode)
+	}
+
+	// Second priority, if the status doesn't have the deploymentMode recorded, is explicit annotations
 	deploymentMode, ok := annotations[constants.DeploymentMode]
 	if ok && (deploymentMode == string(constants.RawDeployment) || deploymentMode ==
 		string(constants.Serverless) || deploymentMode == string(constants.ModelMeshDeployment)) {
 		return constants.DeploymentModeType(deploymentMode)
 	}
+
+	// Finally, if an InferenceService is being created and does not explicitly specify a DeploymentMode
 	return constants.DeploymentModeType(deployConfig.DefaultDeploymentMode)
 }
 
@@ -254,7 +273,7 @@ func GetServingRuntime(cl client.Client, name string, namespace string) (*v1alph
 	err := cl.Get(context.TODO(), client.ObjectKey{Name: name, Namespace: namespace}, runtime)
 	if err == nil {
 		return &runtime.Spec, nil
-	} else if !errors.IsNotFound(err) {
+	} else if !apierrors.IsNotFound(err) {
 		return nil, err
 	}
 
@@ -298,9 +317,9 @@ func UpdateImageTag(container *v1.Container, runtimeVersion *string, servingRunt
 	} else if utils.IsGPUEnabled(container.Resources) && len(strings.Split(image, ":")) > 0 {
 		re := regexp.MustCompile(`(:([\w.\-_]*))$`)
 		if len(re.FindString(image)) > 0 {
-			// For TFServing/TorchServe the GPU image is tagged with suffix "-gpu", when the version is found in the tag
+			// For TFServing/TorchServe/HuggingFace the GPU image is tagged with suffix "-gpu", when the version is found in the tag
 			// and runtimeVersion is not specified, we default to append the "-gpu" suffix to the image tag
-			if servingRuntime != nil && (*servingRuntime == constants.TFServing || *servingRuntime == constants.TorchServe) {
+			if servingRuntime != nil && (*servingRuntime == constants.TFServing || *servingRuntime == constants.TorchServe || *servingRuntime == constants.HuggingFaceServer) {
 				// check for the case when image field is specified directly with gpu tag
 				if !strings.HasSuffix(container.Image, "-gpu") {
 					container.Image = image + "-gpu"
@@ -318,7 +337,7 @@ func ListPodsByLabel(cl client.Client, namespace string, labelKey string, labelV
 		client.MatchingLabels{labelKey: labelVal},
 	}
 	err := cl.List(context.TODO(), podList, opts...)
-	if err != nil && !errors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, err
 	}
 	sortPodsByCreatedTimestampDesc(podList)
@@ -362,4 +381,150 @@ func ValidateStorageURI(storageURI *string, client client.Client) error {
 	}
 
 	return fmt.Errorf(v1beta1.UnsupportedStorageURIFormatError, strings.Join(SupportedStorageURIPrefixList, ", "), *storageURI)
+}
+
+// Function to add a new environment variable to a specific container in the PodSpec
+func AddEnvVarToPodSpec(podSpec *v1.PodSpec, containerName, envName, envValue string) error {
+	updatedResult := false
+	// Iterate over the containers in the PodTemplateSpec to find the specified container
+	for i, container := range podSpec.Containers {
+		if container.Name == containerName {
+			updatedResult = true
+			if _, exists := utils.GetEnvVarValue(container.Env, envName); exists {
+				// Overwrite the environment variable
+				for j, envVar := range container.Env {
+					if envVar.Name == envName {
+						podSpec.Containers[i].Env[j].Value = envValue
+						break
+					}
+				}
+			} else {
+				// Add the new environment variable to the Env field if it ooes not exist
+				container.Env = append(container.Env, v1.EnvVar{
+					Name:  envName,
+					Value: envValue,
+				})
+				podSpec.Containers[i].Env = container.Env
+			}
+		}
+	}
+
+	if !updatedResult {
+		return fmt.Errorf("target container(%s) does not exist", containerName)
+	}
+	return nil
+}
+
+func MergeServingRuntimeAndInferenceServiceSpecs(srContainers []v1.Container, isvcContainer v1.Container, isvc *v1beta1.InferenceService, targetContainerName string, srPodSpec v1alpha1.ServingRuntimePodSpec, isvcPodSpec v1beta1.PodSpec) (int, *v1.Container, *v1.PodSpec, error) {
+	var err error
+	containerIndexInSR := -1
+	for i := range srContainers {
+		if srContainers[i].Name == targetContainerName {
+			containerIndexInSR = i
+			break
+		}
+	}
+	if containerIndexInSR == -1 {
+		errMsg := fmt.Sprintf("failed to find %s in ServingRuntime containers", targetContainerName)
+		isvc.Status.UpdateModelTransitionStatus(v1beta1.InvalidSpec, &v1beta1.FailureInfo{
+			Reason:  v1beta1.InvalidPredictorSpec,
+			Message: errMsg,
+		})
+		return 0, nil, nil, errors.New(errMsg)
+	}
+
+	mergedContainer, err := MergeRuntimeContainers(&srContainers[containerIndexInSR], &isvcContainer)
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to merge container. Detail: %s", err)
+		isvc.Status.UpdateModelTransitionStatus(v1beta1.InvalidSpec, &v1beta1.FailureInfo{
+			Reason:  v1beta1.InvalidPredictorSpec,
+			Message: errMsg,
+		})
+		return 0, nil, nil, errors.New(errMsg)
+	}
+
+	mergedPodSpec, err := MergePodSpec(&srPodSpec, &isvcPodSpec)
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to consolidate serving runtime PodSpecs. Detail: %s", err)
+		isvc.Status.UpdateModelTransitionStatus(v1beta1.InvalidSpec, &v1beta1.FailureInfo{
+			Reason:  v1beta1.InvalidPredictorSpec,
+			Message: errMsg,
+		})
+		return 0, nil, nil, errors.New(errMsg)
+	}
+	return containerIndexInSR, mergedContainer, mergedPodSpec, nil
+}
+
+// Since the "cookie-secret" arg in the oauth proxy container is generated randomly,
+// we exclude that arg while comparing existing and desired deployment specs
+func RemoveCookieSecretArg(deployment appsv1.Deployment) *appsv1.Deployment {
+	dep := deployment.DeepCopy()
+	for i, container := range dep.Spec.Template.Spec.Containers {
+		if container.Name == "oauth-proxy" {
+			var newArgs []string
+			for _, arg := range container.Args {
+				if !strings.Contains(arg, "cookie-secret") {
+					newArgs = append(newArgs, arg)
+				}
+			}
+			dep.Spec.Template.Spec.Containers[i].Args = newArgs
+		}
+	}
+	return dep
+}
+
+// Check for route created by odh-model-controller. If the route is found, use it as the isvc URL
+func GetRouteURLIfExists(cli client.Client, metadata metav1.ObjectMeta, isvcName string) (*apis.URL, error) {
+	foundRoute := false
+	routeReady := false
+	route := &routev1.Route{}
+	err := cli.Get(context.TODO(), types.NamespacedName{Name: isvcName, Namespace: metadata.Namespace}, route)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if the route is owned by the InferenceService
+	for _, ownerRef := range route.OwnerReferences {
+		if ownerRef.UID == metadata.UID {
+			foundRoute = true
+		}
+	}
+
+	// Check if the route is admitted
+	for _, ingress := range route.Status.Ingress {
+		for _, condition := range ingress.Conditions {
+			if condition.Type == "Admitted" && condition.Status == "True" {
+				routeReady = true
+			}
+		}
+	}
+
+	if !(foundRoute && routeReady) {
+		return nil, fmt.Errorf("route %s/%s not found or not ready", metadata.Namespace, metadata.Name)
+	}
+
+	// Construct the URL
+	host := route.Spec.Host
+	scheme := "http"
+	if route.Spec.TLS != nil && route.Spec.TLS.Termination != "" {
+		scheme = "https"
+	}
+
+	// Create the URL as an apis.URL object
+	routeURL := &apis.URL{
+		Scheme: scheme,
+		Host:   host,
+	}
+
+	return routeURL, nil
+}
+
+func FilterList(slice []string, element string) []string {
+	var result []string
+	for _, item := range slice {
+		if item != element {
+			result = append(result, item)
+		}
+	}
+	return result
 }

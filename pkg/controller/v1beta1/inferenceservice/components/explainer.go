@@ -71,9 +71,19 @@ func NewExplainer(client client.Client, clientset kubernetes.Interface, scheme *
 func (e *Explainer) Reconcile(isvc *v1beta1.InferenceService) (ctrl.Result, error) {
 	e.Log.Info("Reconciling Explainer", "ExplainerSpec", isvc.Spec.Explainer)
 	explainer := isvc.Spec.Explainer.GetImplementation()
-	annotations := utils.Filter(isvc.Annotations, func(key string) bool {
-		return !utils.Includes(constants.ServiceAnnotationDisallowedList, key)
-	})
+	var annotations map[string]string
+	if e.deploymentMode == constants.RawDeployment {
+		annotations = utils.Filter(isvc.Annotations, func(key string) bool {
+			// https://issues.redhat.com/browse/RHOAIENG-20326
+			// For RawDeployment, we allow the security.opendatahub.io/enable-auth annotation
+			return !utils.Includes(isvcutils.FilterList(e.inferenceServiceConfig.ServiceAnnotationDisallowedList, constants.ODHKserveRawAuth), key)
+		})
+	} else {
+		annotations = utils.Filter(isvc.Annotations, func(key string) bool {
+			return !utils.Includes(e.inferenceServiceConfig.ServiceAnnotationDisallowedList, key)
+		})
+	}
+
 	// KNative does not support INIT containers or mounting, so we add annotations that trigger the
 	// StorageInitializer injector to mutate the underlying deployment to provision model data
 	if sourceURI := explainer.GetStorageUri(); sourceURI != nil {
@@ -104,11 +114,20 @@ func (e *Explainer) Reconcile(isvc *v1beta1.InferenceService) (ctrl.Result, erro
 	}
 
 	// Labels and annotations from explainer component
-	// Label filter will be handled in ksvc_reconciler
+	// Label filter will be handled in ksvc_reconciler and raw reconciler
 	explainerLabels := isvc.Spec.Explainer.Labels
-	explainerAnnotations := utils.Filter(isvc.Spec.Explainer.Annotations, func(key string) bool {
-		return !utils.Includes(constants.ServiceAnnotationDisallowedList, key)
-	})
+	var explainerAnnotations map[string]string
+	if e.deploymentMode == constants.RawDeployment {
+		explainerAnnotations = utils.Filter(isvc.Spec.Explainer.Annotations, func(key string) bool {
+			// https://issues.redhat.com/browse/RHOAIENG-20326
+			// For RawDeployment, we allow the security.opendatahub.io/enable-auth annotation
+			return !utils.Includes(isvcutils.FilterList(e.inferenceServiceConfig.ServiceAnnotationDisallowedList, constants.ODHKserveRawAuth), key)
+		})
+	} else {
+		explainerAnnotations = utils.Filter(isvc.Spec.Explainer.Annotations, func(key string) bool {
+			return !utils.Includes(e.inferenceServiceConfig.ServiceAnnotationDisallowedList, key)
+		})
+	}
 
 	// Labels and annotations priority: explainer component > isvc
 	// Labels and annotations from high priority will overwrite that from low priority
@@ -141,18 +160,22 @@ func (e *Explainer) Reconcile(isvc *v1beta1.InferenceService) (ctrl.Result, erro
 
 	// Here we allow switch between knative and vanilla deployment
 	if e.deploymentMode == constants.RawDeployment {
-		r, err := raw.NewRawKubeReconciler(e.client, e.clientset, e.scheme, objectMeta,
-			&isvc.Spec.Explainer.ComponentExtensionSpec, &podSpec)
+		r, err := raw.NewRawKubeReconciler(e.client, e.clientset, e.scheme, constants.InferenceServiceResource, objectMeta, metav1.ObjectMeta{},
+			&isvc.Spec.Explainer.ComponentExtensionSpec, &podSpec, nil)
 		if err != nil {
 			return ctrl.Result{}, errors.Wrapf(err, "fails to create NewRawKubeReconciler for explainer")
 		}
 		// set Deployment Controller
-		if err := controllerutil.SetControllerReference(isvc, r.Deployment.Deployment, e.scheme); err != nil {
-			return ctrl.Result{}, errors.Wrapf(err, "fails to set deployment owner reference for explainer")
+		for _, deployment := range r.Deployment.DeploymentList {
+			if err := controllerutil.SetControllerReference(isvc, deployment, e.scheme); err != nil {
+				return ctrl.Result{}, errors.Wrapf(err, "fails to set deployment owner reference for explainer")
+			}
 		}
 		// set Service Controller
-		if err := controllerutil.SetControllerReference(isvc, r.Service.Service, e.scheme); err != nil {
-			return ctrl.Result{}, errors.Wrapf(err, "fails to set service owner reference for explainer")
+		for _, svc := range r.Service.ServiceList {
+			if err := controllerutil.SetControllerReference(isvc, svc, e.scheme); err != nil {
+				return ctrl.Result{}, errors.Wrapf(err, "fails to set service owner reference for explainer")
+			}
 		}
 		// set autoscaler Controller
 		if err := r.Scaler.Autoscaler.SetControllerReferences(isvc, e.scheme); err != nil {
@@ -165,8 +188,11 @@ func (e *Explainer) Reconcile(isvc *v1beta1.InferenceService) (ctrl.Result, erro
 		}
 		isvc.Status.PropagateRawStatus(v1beta1.ExplainerComponent, deployment, r.URL)
 	} else {
-		r := knative.NewKsvcReconciler(e.client, e.scheme, objectMeta, &isvc.Spec.Explainer.ComponentExtensionSpec,
-			&podSpec, isvc.Status.Components[v1beta1.ExplainerComponent])
+		r, err := knative.NewKsvcReconciler(e.client, e.scheme, objectMeta, &isvc.Spec.Explainer.ComponentExtensionSpec,
+			&podSpec, isvc.Status.Components[v1beta1.ExplainerComponent], e.inferenceServiceConfig.ServiceLabelDisallowedList)
+		if err != nil {
+			return ctrl.Result{}, errors.Wrapf(err, "fails to create new knative service reconciler for explainer")
+		}
 
 		if err := controllerutil.SetControllerReference(isvc, r.Service, e.scheme); err != nil {
 			return ctrl.Result{}, errors.Wrapf(err, "fails to set owner reference for explainer")

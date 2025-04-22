@@ -17,18 +17,16 @@ limitations under the License.
 package v1beta1
 
 import (
-	"fmt"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"google.golang.org/protobuf/proto"
-
-	"github.com/kserve/kserve/pkg/constants"
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/types"
+	"google.golang.org/protobuf/proto"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/kserve/kserve/pkg/constants"
 )
 
 func TestTorchServeValidation(t *testing.T) {
@@ -55,7 +53,7 @@ func TestTorchServeValidation(t *testing.T) {
 					},
 				},
 			},
-			matcher: gomega.MatchError(fmt.Sprintf(InvalidPyTorchRuntimeExcludesGPU)),
+			matcher: gomega.MatchError(InvalidPyTorchRuntimeExcludesGPU),
 		},
 		"RejectGpuGpuResourceWithoutGpuRuntime": {
 			spec: PredictorSpec{
@@ -70,7 +68,7 @@ func TestTorchServeValidation(t *testing.T) {
 					},
 				},
 			},
-			matcher: gomega.MatchError(fmt.Sprintf(InvalidPyTorchRuntimeIncludesGPU)),
+			matcher: gomega.MatchError(InvalidPyTorchRuntimeIncludesGPU),
 		},
 	}
 
@@ -90,9 +88,17 @@ func TestTorchServeDefaulter(t *testing.T) {
 
 	protocolV1 := constants.ProtocolV1
 
-	defaultResource = v1.ResourceList{
+	defaultResource := v1.ResourceList{
 		v1.ResourceMemory: resource.MustParse("2Gi"),
 		v1.ResourceCPU:    resource.MustParse("1"),
+	}
+	config := &InferenceServicesConfig{
+		Resource: ResourceConfig{
+			CPULimit:      "1",
+			MemoryLimit:   "2Gi",
+			CPURequest:    "1",
+			MemoryRequest: "2Gi",
+		},
 	}
 	scenarios := map[string]struct {
 		spec     PredictorSpec
@@ -148,7 +154,7 @@ func TestTorchServeDefaulter(t *testing.T) {
 
 	for name, scenario := range scenarios {
 		t.Run(name, func(t *testing.T) {
-			scenario.spec.PyTorch.Default(nil)
+			scenario.spec.PyTorch.Default(config)
 			if !g.Expect(scenario.spec).To(gomega.Equal(scenario.expected)) {
 				t.Errorf("got %v, want %v", scenario.spec, scenario.expected)
 			}

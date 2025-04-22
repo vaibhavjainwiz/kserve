@@ -5,6 +5,51 @@ metadata:
   name: kserve-manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create
+  - get
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - events
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - patch
+- apiGroups:
   - admissionregistration.k8s.io
   resources:
   - mutatingwebhookconfigurations
@@ -42,61 +87,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - ""
+  - gateway.networking.k8s.io
   resources:
-  - configmaps
-  verbs:
-  - create
-  - get
-  - update
-- apiGroups:
-  - ""
-  resources:
-  - events
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - namespaces
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - pods
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - create
-  - delete
-  - get
-  - patch
-  - update
-- apiGroups:
-  - ""
-  resources:
-  - serviceaccounts
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - services
+  - httproutes
   verbs:
   - create
   - delete
@@ -109,17 +102,6 @@ rules:
   - networking.istio.io
   resources:
   - virtualservices
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - networking.istio.io
-  resources:
   - virtualservices/finalizers
   verbs:
   - create
@@ -150,9 +132,28 @@ rules:
   - update
   - watch
 - apiGroups:
-  - serving.knative.dev
+  - operator.knative.dev
   resources:
-  - services
+  - knativeservings
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - kserve-inferencegraph-auth-verifiers
+  resources:
+  - clusterrolebindings
+  verbs:
+  - create
+  - get
+  - patch
+  - update
+- apiGroups:
+  - route.openshift.io
+  resources:
+  - routes
   verbs:
   - create
   - delete
@@ -162,8 +163,15 @@ rules:
   - update
   - watch
 - apiGroups:
+  - route.openshift.io
+  resources:
+  - routes/status
+  verbs:
+  - get
+- apiGroups:
   - serving.knative.dev
   resources:
+  - services
   - services/finalizers
   verbs:
   - create
@@ -186,100 +194,13 @@ rules:
   resources:
   - clusterservingruntimes
   - clusterservingruntimes/finalizers
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - serving.kserve.io
-  resources:
-  - clusterservingruntimes/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - serving.kserve.io
-  resources:
   - clusterstoragecontainers
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - serving.kserve.io
-  resources:
   - inferencegraphs
   - inferencegraphs/finalizers
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - serving.kserve.io
-  resources:
-  - inferencegraphs/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - serving.kserve.io
-  resources:
   - inferenceservices
   - inferenceservices/finalizers
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - serving.kserve.io
-  resources:
-  - inferenceservices/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - serving.kserve.io
-  resources:
   - servingruntimes
   - servingruntimes/finalizers
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - serving.kserve.io
-  resources:
-  - servingruntimes/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - serving.kserve.io
-  resources:
   - trainedmodels
   verbs:
   - create
@@ -292,8 +213,20 @@ rules:
 - apiGroups:
   - serving.kserve.io
   resources:
+  - clusterservingruntimes/status
+  - inferencegraphs/status
+  - inferenceservices/status
+  - servingruntimes/status
   - trainedmodels/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - serving.kserve.io
+  resources:
+  - localmodelcaches
+  verbs:
+  - get
+  - list
+  - watch

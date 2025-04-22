@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import time
+import asyncio
 import base64
 import json
 import os
@@ -31,10 +31,13 @@ from kubernetes import client
 from kubernetes.client import V1Container, V1ContainerPort
 from ..common.utils import KSERVE_TEST_NAMESPACE, predict_grpc
 
+pytest.skip("Not testable in ODH at the moment", allow_module_level=True)
+
 
 @pytest.mark.grpc
 @pytest.mark.predictor
-def test_custom_model_grpc_logger():
+@pytest.mark.asyncio(scope="session")
+async def test_custom_model_grpc():
     service_name = "custom-grpc-logger"
     model_name = "custom-model"
 
@@ -55,7 +58,7 @@ def test_custom_model_grpc_logger():
 
     logger_isvc = V1beta1InferenceService(
         api_version=constants.KSERVE_V1BETA1,
-        kind=constants.KSERVE_KIND,
+        kind=constants.KSERVE_KIND_INFERENCESERVICE,
         metadata=client.V1ObjectMeta(name=msg_dumper, namespace=KSERVE_TEST_NAMESPACE),
         spec=V1beta1InferenceServiceSpec(predictor=logger_predictor),
     )
@@ -74,7 +77,7 @@ def test_custom_model_grpc_logger():
         containers=[
             V1Container(
                 name="kserve-container",
-                image="kserve/custom-model-grpc:" + os.environ.get("GITHUB_SHA"),
+                image=os.environ.get("CUSTOM_MODEL_GRPC_IMG_TAG"),
                 resources=V1ResourceRequirements(
                     requests={"cpu": "50m", "memory": "128Mi"},
                     limits={"cpu": "100m", "memory": "1Gi"},
@@ -89,7 +92,7 @@ def test_custom_model_grpc_logger():
 
     isvc = V1beta1InferenceService(
         api_version=constants.KSERVE_V1BETA1,
-        kind=constants.KSERVE_KIND,
+        kind=constants.KSERVE_KIND_INFERENCESERVICE,
         metadata=client.V1ObjectMeta(
             name=service_name, namespace=KSERVE_TEST_NAMESPACE
         ),
@@ -113,19 +116,18 @@ def test_custom_model_grpc_logger():
             },
         }
     ]
-    response = predict_grpc(
+    response = await predict_grpc(
         service_name=service_name, payload=payload, model_name=model_name
     )
-    fields = response.outputs[0].contents.ListFields()
-    _, field_value = fields[0]
-    points = ["%.3f" % (point) for point in list(field_value)]
+    fields = response.outputs[0].data
+    points = ["%.3f" % (point) for point in fields]
     assert points == ["14.976", "14.037", "13.966", "12.252", "12.086"]
 
     pods = kserve_client.core_api.list_namespaced_pod(
         KSERVE_TEST_NAMESPACE,
         label_selector="serving.kserve.io/inferenceservice={}".format(msg_dumper),
     )
-    time.sleep(5)
+    await asyncio.sleep(5)
     log = ""
     for pod in pods.items:
         log += kserve_client.core_api.read_namespaced_pod_log(

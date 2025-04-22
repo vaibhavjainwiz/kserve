@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from grpc import ServicerContext
 
 from . import grpc_predict_v2_pb2 as pb
 from . import grpc_predict_v2_pb2_grpc
-from kserve.protocol.infer_type import InferRequest, InferResponse
-from kserve.protocol.dataplane import DataPlane
-from kserve.protocol.model_repository_extension import ModelRepositoryExtension
-from kserve.utils.utils import to_headers
-
-from grpc import ServicerContext
+from ..infer_type import InferRequest, InferResponse
+from ..dataplane import DataPlane
+from ..model_repository_extension import ModelRepositoryExtension
+from ...errors import InvalidInput
+from ...utils.utils import to_headers
 
 
 class InferenceServicer(grpc_predict_v2_pb2_grpc.GRPCInferenceServiceServicer):
@@ -33,6 +33,21 @@ class InferenceServicer(grpc_predict_v2_pb2_grpc.GRPCInferenceServiceServicer):
         super().__init__()
         self._data_plane = data_plane
         self._mode_repository_extension = model_repository_extension
+
+    @classmethod
+    def validate_grpc_request(cls, request: pb.ModelInferRequest):
+        raw_inputs_length = len(request.raw_input_contents)
+        if raw_inputs_length != 0 and len(request.inputs) != raw_inputs_length:
+            raise InvalidInput(
+                f"the number of inputs ({len(request.inputs)}) does not match the expected number of "
+                f"raw input contents ({raw_inputs_length}) for model '{request.model_name}'."
+            )
+        if raw_inputs_length != 0:
+            for input_ in request.inputs:
+                if input_.HasField("contents"):
+                    raise InvalidInput(
+                        f"contents field must not be specified when using raw_input_contents for input '{input_.name}' for model '{request.model_name}'"
+                    )
 
     async def ServerMetadata(self, request: pb.ServerMetadataRequest, context):
         metadata = self._data_plane.metadata()
@@ -58,7 +73,7 @@ class InferenceServicer(grpc_predict_v2_pb2_grpc.GRPCInferenceServiceServicer):
     async def ModelReady(
         self, request: pb.ModelReadyRequest, context
     ) -> pb.ModelReadyResponse:
-        is_ready = self._data_plane.model_ready(model_name=request.name)
+        is_ready = await self._data_plane.model_ready(model_name=request.name)
         return pb.ModelReadyResponse(ready=is_ready)
 
     async def ModelMetadata(
@@ -96,6 +111,7 @@ class InferenceServicer(grpc_predict_v2_pb2_grpc.GRPCInferenceServiceServicer):
         self, request: pb.ModelInferRequest, context: ServicerContext
     ) -> pb.ModelInferResponse:
         headers = to_headers(context)
+        self.validate_grpc_request(request)
         infer_request = InferRequest.from_grpc(request)
         response_body, _ = await self._data_plane.infer(
             request=infer_request, headers=headers, model_name=request.model_name

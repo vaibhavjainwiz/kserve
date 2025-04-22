@@ -21,10 +21,11 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/kserve/kserve/pkg/webhook/admission/localmodelcache"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/kserve/kserve/pkg/utils"
-	istio_networking "istio.io/api/networking/v1beta1"
+	istio_networking "istio.io/api/networking/v1alpha3"
 	istioclientv1beta1 "istio.io/client-go/pkg/apis/networking/v1beta1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -32,6 +33,7 @@ import (
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"k8s.io/client-go/tools/record"
+	operatorv1beta1 "knative.dev/operator/pkg/apis/operator/v1beta1"
 	knservingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -40,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	"github.com/kserve/kserve/pkg/apis/serving/v1beta1"
@@ -50,6 +53,7 @@ import (
 	v1beta1controller "github.com/kserve/kserve/pkg/controller/v1beta1/inferenceservice"
 	"github.com/kserve/kserve/pkg/webhook/admission/pod"
 	"github.com/kserve/kserve/pkg/webhook/admission/servingruntime"
+	routev1 "github.com/openshift/api/route/v1"
 )
 
 var (
@@ -173,6 +177,20 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	knServingFound, knServingCheckErr := utils.IsCrdAvailable(cfg, operatorv1beta1.SchemeGroupVersion.String(), constants.KnativeServingKind)
+	if knServingCheckErr != nil {
+		setupLog.Error(knServingCheckErr, "error when checking if Knative KnativeServing kind is available")
+		os.Exit(1)
+	}
+	if knServingFound {
+		setupLog.Info("Setting up Knative Operator scheme")
+		if err := operatorv1beta1.AddToScheme(mgr.GetScheme()); err != nil {
+			setupLog.Error(err, "unable to add Knative Operator APIs to scheme")
+			os.Exit(1)
+		}
+	}
+
 	if !ingressConfig.DisableIstioVirtualHost {
 		vsFound, vsCheckErr := utils.IsCrdAvailable(cfg, istioclientv1beta1.SchemeGroupVersion.String(), constants.IstioVirtualServiceKind)
 		if vsCheckErr != nil {
@@ -186,6 +204,16 @@ func main() {
 				os.Exit(1)
 			}
 		}
+	}
+	if err = routev1.AddToScheme(mgr.GetScheme()); err != nil {
+		setupLog.Error(err, "unable to add routev1 APIs to scheme")
+		os.Exit(1)
+	}
+
+	setupLog.Info("Setting up gateway api scheme")
+	if err := gatewayapiv1.Install(mgr.GetScheme()); err != nil {
+		setupLog.Error(err, "unable to add Gateway APIs to scheme")
+		os.Exit(1)
 	}
 
 	setupLog.Info("Setting up core scheme")
@@ -260,6 +288,7 @@ func main() {
 
 	if err = ctrl.NewWebhookManagedBy(mgr).
 		For(&v1alpha1.TrainedModel{}).
+		WithValidator(&v1alpha1.TrainedModelValidator{}).
 		Complete(); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "v1alpha1")
 		os.Exit(1)
@@ -267,6 +296,7 @@ func main() {
 
 	if err = ctrl.NewWebhookManagedBy(mgr).
 		For(&v1alpha1.InferenceGraph{}).
+		WithValidator(&v1alpha1.InferenceGraphValidator{}).
 		Complete(); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "v1alpha1")
 		os.Exit(1)
@@ -274,8 +304,18 @@ func main() {
 
 	if err = ctrl.NewWebhookManagedBy(mgr).
 		For(&v1beta1.InferenceService{}).
+		WithDefaulter(&v1beta1.InferenceServiceDefaulter{}).
+		WithValidator(&v1beta1.InferenceServiceValidator{}).
 		Complete(); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "v1beta1")
+		os.Exit(1)
+	}
+
+	if err = ctrl.NewWebhookManagedBy(mgr).
+		For(&v1alpha1.LocalModelCache{}).
+		WithValidator(&localmodelcache.LocalModelCacheValidator{Client: mgr.GetClient()}).
+		Complete(); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "localmodelcache")
 		os.Exit(1)
 	}
 

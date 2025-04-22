@@ -27,6 +27,7 @@ from cloudevents.conversion import to_binary, to_structured
 from cloudevents.http import CloudEvent
 from grpc import ServicerContext
 from kserve.protocol.infer_type import InferOutput, InferRequest, InferResponse
+from ..constants.constants import PredictorProtocol
 from ..errors import InvalidInput
 
 
@@ -212,7 +213,9 @@ def get_predict_response(
                     name=col,
                     shape=list(result[col].shape),
                     datatype=from_np_dtype(result[col].dtype),
-                    data=result[col].tolist(),
+                )
+                infer_output.set_data_from_numpy(
+                    result[col].to_numpy(), binary_data=payload.use_binary_outputs
                 )
                 infer_outputs.append(infer_output)
         elif (
@@ -222,7 +225,10 @@ def get_predict_response(
                 name="output-0",
                 shape=[len(result)],
                 datatype="BYTES",
-                data=result,
+            )
+            infer_output.set_data_from_numpy(
+                np.array(result, dtype=np.object_),
+                binary_data=payload.use_binary_outputs,
             )
             infer_outputs.append(infer_output)
         else:
@@ -232,13 +238,17 @@ def get_predict_response(
                 name="output-0",
                 shape=list(result.shape),
                 datatype=from_np_dtype(result.dtype),
-                data=result.flatten().tolist(),
+            )
+            infer_output.set_data_from_numpy(
+                result, binary_data=payload.use_binary_outputs
             )
             infer_outputs.append(infer_output)
         return InferResponse(
             model_name=model_name,
             infer_outputs=infer_outputs,
             response_id=payload.id if payload.id else generate_uuid(),
+            use_binary_outputs=payload.use_binary_outputs,
+            requested_outputs=payload.request_outputs,
         )
     else:
         raise InvalidInput(f"unsupported payload type {type(payload)}")
@@ -261,3 +271,17 @@ def strtobool(val: str) -> bool:
         return False
     else:
         raise ValueError("invalid truth value %r" % (val,))
+
+
+def is_v2(protocol: Union[str, PredictorProtocol]) -> bool:
+    return protocol == PredictorProtocol.REST_V2 or (
+        isinstance(protocol, str)
+        and protocol.lower() == PredictorProtocol.REST_V2.value.lower()
+    )
+
+
+def is_v1(protocol: Union[str, PredictorProtocol]) -> bool:
+    return protocol == PredictorProtocol.REST_V1 or (
+        isinstance(protocol, str)
+        and protocol.lower() == PredictorProtocol.REST_V1.value.lower()
+    )

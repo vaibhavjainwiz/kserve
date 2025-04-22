@@ -19,6 +19,12 @@ package raw
 import (
 	"fmt"
 
+	"github.com/kserve/kserve/pkg/apis/serving/v1beta1"
+	"github.com/kserve/kserve/pkg/constants"
+	autoscaler "github.com/kserve/kserve/pkg/controller/v1beta1/inferenceservice/reconcilers/autoscaler"
+	deployment "github.com/kserve/kserve/pkg/controller/v1beta1/inferenceservice/reconcilers/deployment"
+	"github.com/kserve/kserve/pkg/controller/v1beta1/inferenceservice/reconcilers/ingress"
+	service "github.com/kserve/kserve/pkg/controller/v1beta1/inferenceservice/reconcilers/service"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,12 +33,10 @@ import (
 	knapis "knative.dev/pkg/apis"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/kserve/kserve/pkg/apis/serving/v1beta1"
-	autoscaler "github.com/kserve/kserve/pkg/controller/v1beta1/inferenceservice/reconcilers/autoscaler"
-	deployment "github.com/kserve/kserve/pkg/controller/v1beta1/inferenceservice/reconcilers/deployment"
-	"github.com/kserve/kserve/pkg/controller/v1beta1/inferenceservice/reconcilers/ingress"
-	service "github.com/kserve/kserve/pkg/controller/v1beta1/inferenceservice/reconcilers/service"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+var log = logf.Log.WithName("RawKubeReconciler")
 
 // RawKubeReconciler reconciles the Native K8S Resources
 type RawKubeReconciler struct {
@@ -48,9 +52,11 @@ type RawKubeReconciler struct {
 func NewRawKubeReconciler(client client.Client,
 	clientset kubernetes.Interface,
 	scheme *runtime.Scheme,
+	resourceType constants.ResourceType,
 	componentMeta metav1.ObjectMeta,
+	workerComponentMeta metav1.ObjectMeta,
 	componentExt *v1beta1.ComponentExtensionSpec,
-	podSpec *corev1.PodSpec) (*RawKubeReconciler, error) {
+	podSpec *corev1.PodSpec, workerPodSpec *corev1.PodSpec) (*RawKubeReconciler, error) {
 	as, err := autoscaler.NewAutoscalerReconciler(client, scheme, componentMeta, componentExt)
 	if err != nil {
 		return nil, err
@@ -61,11 +67,27 @@ func NewRawKubeReconciler(client client.Client,
 		return nil, err
 	}
 
+	var multiNodeEnabled bool
+	if workerPodSpec != nil {
+		multiNodeEnabled = true
+	}
+
+	// do not return error as service config is optional
+	serviceConfig, err1 := v1beta1.NewServiceConfig(clientset)
+	if err1 != nil {
+		log.Error(err1, "failed to get service config")
+	}
+
+	depl, err := deployment.NewDeploymentReconciler(client, clientset, scheme, resourceType, componentMeta, workerComponentMeta, componentExt, podSpec, workerPodSpec)
+	if err != nil {
+		return nil, err
+	}
+
 	return &RawKubeReconciler{
 		client:     client,
 		scheme:     scheme,
-		Deployment: deployment.NewDeploymentReconciler(client, scheme, componentMeta, componentExt, podSpec),
-		Service:    service.NewServiceReconciler(client, scheme, componentMeta, componentExt, podSpec),
+		Deployment: depl,
+		Service:    service.NewServiceReconciler(client, scheme, resourceType, componentMeta, componentExt, podSpec, multiNodeEnabled, serviceConfig),
 		Scaler:     as,
 		URL:        url,
 	}, nil
@@ -83,19 +105,19 @@ func createRawURL(clientset kubernetes.Interface, metadata metav1.ObjectMeta) (*
 	if err != nil {
 		return nil, fmt.Errorf("failed creating host name: %w", err)
 	}
-
 	return url, nil
 }
 
 // Reconcile ...
-func (r *RawKubeReconciler) Reconcile() (*appsv1.Deployment, error) {
-	// reconcile Deployment
-	deployment, err := r.Deployment.Reconcile()
+func (r *RawKubeReconciler) Reconcile() ([]*appsv1.Deployment, error) {
+	// reconciling service before deployment because we want to use "service.beta.openshift.io/serving-cert-secret-name"
+	// reconcile Service
+	_, err := r.Service.Reconcile()
 	if err != nil {
 		return nil, err
 	}
-	// reconcile Service
-	_, err = r.Service.Reconcile()
+	// reconcile Deployment
+	deploymentList, err := r.Deployment.Reconcile()
 	if err != nil {
 		return nil, err
 	}
@@ -104,5 +126,6 @@ func (r *RawKubeReconciler) Reconcile() (*appsv1.Deployment, error) {
 	if err != nil {
 		return nil, err
 	}
-	return deployment, nil
+
+	return deploymentList, nil
 }

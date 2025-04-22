@@ -11,17 +11,28 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import base64
 import pathlib
-from typing import Any, Dict, Optional, Union
+import struct
+from http import HTTPStatus
+from typing import Any, Dict, Optional, Union, List
 
+import pydantic
 import torch
+import torch.nn.functional as F
 from accelerate import init_empty_weights
 from kserve import Model
 from kserve.errors import InferenceError
 from kserve.logging import logger
 from kserve.model import PredictorConfig
 from kserve.protocol.infer_type import InferInput, InferRequest, InferResponse
+from kserve.protocol.rest.openai import (
+    EmbeddingRequest,
+    OpenAIEmbeddingModel,
+)
+from kserve.protocol.rest.openai.errors import OpenAIError, create_error_response
+from kserve.protocol.rest.openai.types import Embedding, EmbeddingObject
+from kserve.protocol.rest.openai.types.openapi import Usage
 from kserve.utils.utils import (
     from_np_dtype,
     get_predict_input,
@@ -30,7 +41,6 @@ from kserve.utils.utils import (
 from torch import Tensor
 from transformers import (
     AutoConfig,
-    AutoModel,
     AutoTokenizer,
     BatchEncoding,
     PreTrainedModel,
@@ -39,15 +49,19 @@ from transformers import (
     TensorType,
 )
 
+from .request_logger import RequestLogger
 from .task import (
     MLTask,
     is_generative_task,
     get_model_class_for_task,
     infer_task_from_model_architecture,
 )
+from .utils import _get_and_verify_max_len, _mean_pooling
 
 
-class HuggingfaceEncoderModel(Model):  # pylint:disable=c-extension-no-member
+class HuggingfaceEncoderModel(
+    Model, OpenAIEmbeddingModel
+):  # pylint:disable=c-extension-no-member
     task: MLTask
     model_config: PretrainedConfig
     model_id_or_path: Union[pathlib.Path, str]
@@ -79,7 +93,9 @@ class HuggingfaceEncoderModel(Model):  # pylint:disable=c-extension-no-member
         model_revision: Optional[str] = None,
         tokenizer_revision: Optional[str] = None,
         trust_remote_code: bool = False,
+        return_probabilities: bool = False,
         predictor_config: Optional[PredictorConfig] = None,
+        request_logger: Optional[RequestLogger] = None,
     ):
         super().__init__(model_name, predictor_config)
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -93,11 +109,15 @@ class HuggingfaceEncoderModel(Model):  # pylint:disable=c-extension-no-member
         self.model_revision = model_revision
         self.tokenizer_revision = tokenizer_revision
         self.trust_remote_code = trust_remote_code
+        self.return_probabilities = return_probabilities
+        self.request_logger = request_logger
 
         if model_config:
             self.model_config = model_config
         else:
-            self.model_config = AutoConfig.from_pretrained(self.model_id_or_path)
+            self.model_config = AutoConfig.from_pretrained(
+                self.model_id_or_path, trust_remote_code=self.trust_remote_code
+            )
 
         if task:
             self.task = task
@@ -106,7 +126,7 @@ class HuggingfaceEncoderModel(Model):  # pylint:disable=c-extension-no-member
             except ValueError:
                 inferred_task = None
             if inferred_task is not None and inferred_task != task:
-                logger.warn(
+                logger.warning(
                     f"Inferred task is '{inferred_task.name}' but"
                     f" task is explicitly set to '{self.task.name}'"
                 )
@@ -120,14 +140,17 @@ class HuggingfaceEncoderModel(Model):  # pylint:disable=c-extension-no-member
 
     def load(self) -> bool:
         model_id_or_path = self.model_id_or_path
-        if self.max_length is None:
-            self.max_length = self.model_config.max_length
+
+        self.max_length = _get_and_verify_max_len(self.model_config, self.max_length)
+        model_cls = get_model_class_for_task(self.task)
 
         # device_map = "auto" enables model parallelism but all model architcture dont support it.
         # For pre-check we initialize the model class without weights to check the `_no_split_modules`
         # device_map = "auto" for models that support this else set to either cuda/cpu
         with init_empty_weights():
-            self._model = AutoModel.from_config(self.model_config)
+            self._model = model_cls.from_config(
+                self.model_config, trust_remote_code=self.trust_remote_code
+            )
 
         device_map = self._device
 
@@ -154,7 +177,6 @@ class HuggingfaceEncoderModel(Model):  # pylint:disable=c-extension-no-member
 
         # load huggingface model using from_pretrained for inference mode
         if not self.predictor_host:
-            model_cls = get_model_class_for_task(self.task)
             self._model = model_cls.from_pretrained(
                 model_id_or_path,
                 revision=self.model_revision,
@@ -185,6 +207,11 @@ class HuggingfaceEncoderModel(Model):  # pylint:disable=c-extension-no-member
         context: Dict[str, Any],
     ) -> Union[BatchEncoding, InferRequest]:
         instances = get_predict_input(payload)
+        if isinstance(payload, InferRequest):
+            request_id = payload.id
+        else:
+            request_id = "N.A."
+        self._log_request(request_id, instances)
         # Serialize to tensor
         if self.predictor_host:
             inputs = self._tokenizer(
@@ -198,6 +225,8 @@ class HuggingfaceEncoderModel(Model):  # pylint:disable=c-extension-no-member
             )
             context["payload"] = payload
             context["input_ids"] = inputs["input_ids"]
+            if self.task == MLTask.text_embedding:
+                context["attention_mask"] = inputs["attention_mask"]
             infer_inputs = []
             for key, input_tensor in inputs.items():
                 if (not self.tensor_input_names) or (key in self.tensor_input_names):
@@ -224,6 +253,8 @@ class HuggingfaceEncoderModel(Model):  # pylint:disable=c-extension-no-member
             )
             context["payload"] = payload
             context["input_ids"] = inputs["input_ids"]
+            if self.task == MLTask.text_embedding:
+                context["attention_mask"] = inputs["attention_mask"]
             return inputs
 
     async def predict(
@@ -239,7 +270,12 @@ class HuggingfaceEncoderModel(Model):  # pylint:disable=c-extension-no-member
             input_batch = input_batch.to(self._device)
             try:
                 with torch.no_grad():
-                    outputs = self._model(**input_batch).logits
+                    outputs = self._model(**input_batch)
+                    if self.task == MLTask.text_embedding.value:
+                        # last_hidden_state contains all token embeddings
+                        outputs = outputs.last_hidden_state
+                    else:
+                        outputs = outputs.logits
                     return outputs
             except Exception as e:
                 raise InferenceError(str(e))
@@ -259,25 +295,125 @@ class HuggingfaceEncoderModel(Model):  # pylint:disable=c-extension-no-member
             num_rows, num_cols = outputs.shape
             for i in range(num_rows):
                 out = outputs[i].unsqueeze(0)
-                predicted_idx = out.argmax().item()
-                inferences.append(predicted_idx)
+                if self.return_probabilities:
+                    inferences.append(dict(enumerate(out.numpy().flatten())))
+                else:
+                    predicted_idx = out.argmax().item()
+                    inferences.append(predicted_idx)
             return get_predict_response(request, inferences, self.name)
         elif self.task == MLTask.fill_mask:
             num_rows = outputs.shape[0]
             for i in range(num_rows):
                 mask_pos = (input_ids == self._tokenizer.mask_token_id)[i]
                 mask_token_index = mask_pos.nonzero(as_tuple=True)[0]
-                predicted_token_id = outputs[i, mask_token_index].argmax(axis=-1)
-                inferences.append(self._tokenizer.decode(predicted_token_id))
+                if self.return_probabilities:
+                    probabilities = torch.softmax(outputs[i, mask_token_index], dim=-1)
+                    decoded_probabilities = []
+                    for idx, probs in enumerate(probabilities):
+                        token_probs = []
+                        for token_id, prob in enumerate(probs):
+                            token = self._tokenizer.decode([token_id])
+                            token_probs.append({f"{token}": f"{prob.item():.4f}"})
+                        decoded_probabilities.append(token_probs)
+                    inferences.append(decoded_probabilities)
+                else:
+                    predicted_token_id = outputs[i, mask_token_index].argmax(axis=-1)
+                    inferences.append(self._tokenizer.decode(predicted_token_id))
             return get_predict_response(request, inferences, self.name)
         elif self.task == MLTask.token_classification:
             num_rows = outputs.shape[0]
             for i in range(num_rows):
                 output = outputs[i].unsqueeze(0)
-                predictions = torch.argmax(output, dim=2)
-                inferences.append(predictions.tolist())
+                if self.return_probabilities:
+                    for values in output.tolist():
+                        res = [{k: v for k, v in enumerate(value)} for value in values]
+                        inferences.append([res])
+                else:
+                    predictions = torch.argmax(output, dim=2)
+                    inferences.append(predictions.tolist())
+            return get_predict_response(request, inferences, self.name)
+        elif self.task == MLTask.text_embedding:
+            # Perform pooling
+            outputs = _mean_pooling(outputs, context["attention_mask"])
+            # Normalize embeddings
+            outputs = F.normalize(outputs, p=2, dim=1)
+            num_rows, _ = outputs.shape
+            for i in range(num_rows):
+                inferences.append(outputs[i].tolist())
             return get_predict_response(request, inferences, self.name)
         else:
             raise ValueError(
                 f"Unsupported task {self.task}. Please check the supported `task` option."
             )
+
+    def _log_request(self, request_id: str, prompt: list[str]) -> None:
+        if self.request_logger:
+            self.request_logger.log_inputs(
+                request_id,
+                prompt=prompt,
+            )
+
+    async def create_embedding(self, request: EmbeddingRequest) -> Embedding:
+        params = request.params
+
+        try:
+            pydantic.TypeAdapter(
+                Union[str, List[str], List[int], List[List[int]]]
+            ).validate_python(params.input)
+        except pydantic.ValidationError as e:
+            raise OpenAIError(
+                response=create_error_response(
+                    "'$.input' is invalid. Please check the API reference: https://platform.openai.com/docs/api-reference.",
+                    status_code=HTTPStatus.BAD_REQUEST,
+                    err_type="invalid_request_error",
+                )
+            ) from e
+
+        # The OpenAI documentation allows the input of token lists instead of strings. As the tokenization is specific
+        # to the model, it is most likely different from the ones used by OpenAI (e.g., tiktoken). Libraries like
+        # LangChain attempt to determine the proper tokenization based on the model name and will fall back to the
+        # default "cl100k_base" tokenization, which will certainly not match the deployed model. Instead of silently
+        # accepting the mismatch, we rather raise an exception.
+        try:
+            pydantic.TypeAdapter(Union[str, List[str]]).validate_python(params.input)
+        except pydantic.ValidationError as e:
+            raise OpenAIError(
+                response=create_error_response(
+                    "'input' as token lists is not supported",
+                    status_code=HTTPStatus.NOT_IMPLEMENTED,
+                    err_type="invalid_request_error",
+                )
+            ) from e
+
+        # Call the inference to determine the embedding values
+        context = {}
+        instances = params.input if isinstance(params.input, list) else [params.input]
+        inference_out, _ = await self({"instances": instances}, context)
+        embedding_out = inference_out["predictions"]
+
+        # Calculate the input token count. Attention mask is "1" for each input token.
+        num_input_tokens = int(context["attention_mask"].sum())
+
+        # Optionally encode result to base64
+        if params.encoding_format == "base64":
+            for i, o in enumerate(embedding_out):
+                embedding_bytes = [struct.pack("<f", el) for el in o]
+                embedding_base64 = base64.b64encode(b"".join(embedding_bytes))
+                embedding_out[i] = embedding_base64.decode("ascii")
+
+        return Embedding(
+            object="list",
+            data=[
+                EmbeddingObject(
+                    object="embedding",
+                    index=i,
+                    embedding=o,
+                )
+                for i, o in enumerate(embedding_out)
+            ],
+            model=params.model,
+            usage=Usage(
+                prompt_tokens=num_input_tokens,
+                total_tokens=num_input_tokens,
+            ),
+        )

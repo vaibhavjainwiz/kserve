@@ -13,15 +13,22 @@
 # limitations under the License.
 
 import os
+from enum import Enum
 
 # KServe K8S constants
 KSERVE_GROUP = "serving.kserve.io"
-KSERVE_KIND = "InferenceService"
-KSERVE_PLURAL = "inferenceservices"
+KSERVE_KIND_INFERENCESERVICE = "InferenceService"
+KSERVE_PLURAL_INFERENCESERVICE = "inferenceservices"
 KSERVE_KIND_TRAINEDMODEL = "TrainedModel"
 KSERVE_PLURAL_TRAINEDMODEL = "trainedmodels"
 KSERVE_KIND_INFERENCEGRAPH = "InferenceGraph"
 KSERVE_PLURAL_INFERENCEGRAPH = "inferencegraphs"
+KSERVE_KIND_LOCALMODELNODEGROUP = "LocalModelNodeGroup"
+KSERVE_PLURAL_LOCALMODELNODEGROUP = "localmodelnodegroups"
+KSERVE_KIND_LOCALMODELCACHE = "LocalModelCache"
+KSERVE_PLURAL_LOCALMODELCACHE = "localmodelcaches"
+KSERVE_KIND_LOCALMODELNODE = "LocalModelNode"
+KSERVE_PLURAL_LOCALMODELNODE = "localmodelnodes"
 KSERVE_V1BETA1_VERSION = "v1beta1"
 KSERVE_V1ALPHA1_VERSION = "v1alpha1"
 
@@ -71,3 +78,32 @@ OBSERVED_GENERATION = "observedGeneration"
 
 # K8S metadata key constants
 GENERATION = "generation"
+
+EXPLAINER_BASE_URL_FORMAT = "{0}://{1}"
+
+
+class PredictorProtocol(Enum):
+    REST_V1 = "v1"
+    REST_V2 = "v2"
+    GRPC_V2 = "grpc-v2"
+
+
+# LLM stats map key
+LLM_STATS_KEY = "llm-stats"
+
+# Default GRPC max message length
+MAX_GRPC_MESSAGE_LENGTH = 8388608
+
+V2_ROUTE_PREFIX = "/v2"
+V1_ROUTE_PREFIX = "/v1"
+
+DEFAULT_HTTP_PORT = 8080
+DEFAULT_GRPC_PORT = 8081
+
+# Header containing the json length in case of REST raw response.
+INFERENCE_CONTENT_LENGTH_HEADER = "inference-header-content-length"
+
+
+class ModelType(Enum):
+    EXPLAINER = 1
+    PREDICTOR = 2

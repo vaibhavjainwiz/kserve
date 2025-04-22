@@ -44,7 +44,7 @@ var (
 func (o *ONNXRuntimeSpec) Validate() error {
 	if o.GetStorageUri() != nil {
 		if ext := path.Ext(*o.GetStorageUri()); ext != ONNXFileExt && ext != "" {
-			return fmt.Errorf("Expected storageUri file extension: '%s' but got '%s'", ONNXFileExt, ext)
+			return fmt.Errorf("expected storageUri file extension: '%s' but got '%s'", ONNXFileExt, ext)
 		}
 	}
 
@@ -56,7 +56,7 @@ func (o *ONNXRuntimeSpec) Validate() error {
 // Default sets defaults on the resource
 func (o *ONNXRuntimeSpec) Default(config *InferenceServicesConfig) {
 	o.Container.Name = constants.InferenceServiceContainerName
-	setResourceRequirementDefaults(&o.Resources)
+	setResourceRequirementDefaults(config, &o.Resources)
 }
 
 // GetContainers transforms the resource into a container spec

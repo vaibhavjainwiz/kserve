@@ -22,8 +22,8 @@ from pydantic import ValidationError
 
 
 from .openai_model import (
-    BaseCompletionRequest,
-    OpenAIModel,
+    BaseOpenAIRequest,
+    OpenAICompletionModel,
     AsyncMappingIterator,
     CompletionRequest,
     ChatCompletionRequest,
@@ -91,7 +91,7 @@ def error_handler(f):
     return wrapper
 
 
-class OpenAIProxyModel(OpenAIModel):
+class OpenAIProxyModel(OpenAICompletionModel):
     """
     An implementation of OpenAIModel that proxies requests to a backend server exposing Open AI endpoints.
 
@@ -218,7 +218,7 @@ class OpenAIProxyModel(OpenAIModel):
         return chat_completion_chunk
 
     def _build_request(
-        self, endpoint: str, request: BaseCompletionRequest
+        self, endpoint: str, request: BaseOpenAIRequest
     ) -> httpx.Request:
 
         if request.context and "upstream_headers" in request.context:
@@ -243,8 +243,8 @@ class OpenAIProxyModel(OpenAIModel):
         self, request: CompletionRequest
     ) -> Union[Completion, AsyncIterator[Completion]]:
         self.preprocess_completion_request(request)
-        req = self._build_request(self._completions_endpoint, request)
         if request.params.stream:
+            req = self._build_request(self._completions_endpoint, request)
             r = await self._http_client.send(req, stream=True)
             r.raise_for_status()
             it = AsyncMappingIterator(
@@ -254,23 +254,28 @@ class OpenAIProxyModel(OpenAIModel):
             )
             return it
         else:
-            response = await self._http_client.send(req)
-            response.raise_for_status()
-            if self.skip_upstream_validation:
-                obj = response.json()
-                completion = Completion.model_construct(**obj)
-            else:
-                completion = Completion.model_validate_json(response.content)
+            completion = await self.generate_completion(request)
             self.postprocess_completion(completion, request)
             return completion
+
+    async def generate_completion(self, request: CompletionRequest) -> Completion:
+        req = self._build_request(self._completions_endpoint, request)
+        response = await self._http_client.send(req)
+        response.raise_for_status()
+        if self.skip_upstream_validation:
+            obj = response.json()
+            completion = Completion.model_construct(**obj)
+        else:
+            completion = Completion.model_validate_json(response.content)
+        return completion
 
     @error_handler
     async def create_chat_completion(
         self, request: ChatCompletionRequest
     ) -> Union[ChatCompletion, AsyncIterator[ChatCompletionChunk]]:
         self.preprocess_chat_completion_request(request)
-        req = self._build_request(self._chat_completions_endpoint, request)
         if request.params.stream:
+            req = self._build_request(self._chat_completions_endpoint, request)
             r = await self._http_client.send(req, stream=True)
             r.raise_for_status()
             it = AsyncMappingIterator(
@@ -280,12 +285,19 @@ class OpenAIProxyModel(OpenAIModel):
             )
             return it
         else:
-            response = await self._http_client.send(req)
-            response.raise_for_status()
-            if self.skip_upstream_validation:
-                obj = response.json()
-                chat_completion = ChatCompletion.model_construct(**obj)
-            else:
-                chat_completion = ChatCompletion.model_validate_json(response.content)
+            chat_completion = await self.generate_chat_completion(request)
             self.postprocess_chat_completion(chat_completion, request)
             return chat_completion
+
+    async def generate_chat_completion(
+        self, request: ChatCompletionRequest
+    ) -> ChatCompletion:
+        req = self._build_request(self._chat_completions_endpoint, request)
+        response = await self._http_client.send(req)
+        response.raise_for_status()
+        if self.skip_upstream_validation:
+            obj = response.json()
+            chat_completion = ChatCompletion.model_construct(**obj)
+        else:
+            chat_completion = ChatCompletion.model_validate_json(response.content)
+        return chat_completion

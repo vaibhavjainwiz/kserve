@@ -88,6 +88,38 @@ class ModelNotReady(RuntimeError):
         return self.error_msg
 
 
+class UnsupportedProtocol(Exception):
+    """
+    Exception class indicating requested protocol is not supported.
+    """
+
+    def __init__(self, protocol_version=None):
+        self.reason = f"Unsupported protocol {protocol_version}."
+
+    def __str__(self):
+        return self.reason
+
+
+class ServerNotReady(RuntimeError):
+    def __init__(self, detail: str = None):
+        self.error_msg = "Server is not ready."
+        if detail:
+            self.error_msg = self.error_msg + " " + detail
+
+    def __str__(self):
+        return self.error_msg
+
+
+class ServerNotLive(RuntimeError):
+    def __init__(self, detail: str = None):
+        self.error_msg = "Server is not live."
+        if detail:
+            self.error_msg = self.error_msg + " " + detail
+
+    def __str__(self):
+        return self.error_msg
+
+
 async def exception_handler(_, exc):
     logger.error("Exception:", exc_info=exc)
     return JSONResponse(
@@ -132,3 +164,42 @@ async def not_implemented_error_handler(_, exc):
     return JSONResponse(
         status_code=HTTPStatus.NOT_IMPLEMENTED, content={"error": str(exc)}
     )
+
+
+async def unsupported_protocol_error_handler(_, exc):
+    logger.error("Exception:", exc_info=exc)
+    return JSONResponse(
+        status_code=HTTPStatus.NOT_IMPLEMENTED, content={"error": str(exc)}
+    )
+
+
+async def server_not_ready_handler(_, exc):
+    logger.error("Exception:", exc_info=exc)
+    return JSONResponse(
+        status_code=HTTPStatus.SERVICE_UNAVAILABLE, content={"error": str(exc)}
+    )
+
+
+async def server_not_live_handler(_, exc):
+    logger.error("Exception:", exc_info=exc)
+    return JSONResponse(
+        status_code=HTTPStatus.SERVICE_UNAVAILABLE, content={"error": str(exc)}
+    )
+
+
+class NoModelReady(RuntimeError):
+    def __init__(self, models: [], detail: str = None):
+        self.models = models
+        self.detail = detail
+
+    def __str__(self):
+        model_name_list = [model.name for model in self.models]
+        if len(model_name_list) == 1:
+            self.error_msg = f"Model with name {model_name_list[0]} is not ready."
+        else:
+            self.error_msg = (
+                f"Models with names {','.join(model_name_list)} are not ready."
+            )
+        if self.detail:
+            self.error_msg = self.error_msg + " " + self.detail
+        return self.error_msg

@@ -17,17 +17,20 @@ limitations under the License.
 package inferencegraph
 
 import (
+	"testing"
+
 	"github.com/google/go-cmp/cmp"
-	. "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
-	"github.com/kserve/kserve/pkg/apis/serving/v1beta1"
-	"github.com/kserve/kserve/pkg/constants"
+	"google.golang.org/protobuf/proto"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/apis"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
-	"testing"
+
+	. "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
+	"github.com/kserve/kserve/pkg/apis/serving/v1beta1"
+	"github.com/kserve/kserve/pkg/constants"
 )
 
 func TestCreateInferenceGraphPodSpec(t *testing.T) {
@@ -57,6 +60,8 @@ func TestCreateInferenceGraphPodSpec(t *testing.T) {
 			},
 		},
 	}
+
+	expectedReadinessProbe := constants.GetRouterReadinessProbe()
 
 	testIGSpecs := map[string]*InferenceGraph{
 		"basic": {
@@ -147,6 +152,7 @@ func TestCreateInferenceGraphPodSpec(t *testing.T) {
 					Image: "kserve/router:v0.10.0",
 					Name:  "basic-ig",
 					Args: []string{
+						"--enable-tls",
 						"--graph-json",
 						"{\"nodes\":{\"root\":{\"routerType\":\"Sequence\",\"steps\":[{\"serviceUrl\":\"http://someservice.exmaple.com\"}]}},\"resources\":{}}",
 					},
@@ -160,8 +166,20 @@ func TestCreateInferenceGraphPodSpec(t *testing.T) {
 							v1.ResourceMemory: resource.MustParse("100Mi"),
 						},
 					},
+					ReadinessProbe: expectedReadinessProbe,
+					SecurityContext: &v1.SecurityContext{
+						Privileged:               proto.Bool(false),
+						RunAsNonRoot:             proto.Bool(true),
+						ReadOnlyRootFilesystem:   proto.Bool(true),
+						AllowPrivilegeEscalation: proto.Bool(false),
+						Capabilities: &v1.Capabilities{
+							Drop: []v1.Capability{v1.Capability("ALL")},
+						},
+					},
 				},
 			},
+			AutomountServiceAccountToken: proto.Bool(false),
+			ServiceAccountName:           "default",
 		},
 		"basicgraphwithheaders": {
 			Containers: []v1.Container{
@@ -169,6 +187,7 @@ func TestCreateInferenceGraphPodSpec(t *testing.T) {
 					Image: "kserve/router:v0.10.0",
 					Name:  "basic-ig",
 					Args: []string{
+						"--enable-tls",
 						"--graph-json",
 						"{\"nodes\":{\"root\":{\"routerType\":\"Sequence\",\"steps\":[{\"serviceUrl\":\"http://someservice.exmaple.com\"}]}},\"resources\":{}}",
 					},
@@ -188,8 +207,20 @@ func TestCreateInferenceGraphPodSpec(t *testing.T) {
 							v1.ResourceMemory: resource.MustParse("100Mi"),
 						},
 					},
+					ReadinessProbe: expectedReadinessProbe,
+					SecurityContext: &v1.SecurityContext{
+						Privileged:               proto.Bool(false),
+						RunAsNonRoot:             proto.Bool(true),
+						ReadOnlyRootFilesystem:   proto.Bool(true),
+						AllowPrivilegeEscalation: proto.Bool(false),
+						Capabilities: &v1.Capabilities{
+							Drop: []v1.Capability{v1.Capability("ALL")},
+						},
+					},
 				},
 			},
+			AutomountServiceAccountToken: proto.Bool(false),
+			ServiceAccountName:           "default",
 		},
 		"withresource": {
 			Containers: []v1.Container{
@@ -197,6 +228,7 @@ func TestCreateInferenceGraphPodSpec(t *testing.T) {
 					Image: "kserve/router:v0.10.0",
 					Name:  "resource-ig",
 					Args: []string{
+						"--enable-tls",
 						"--graph-json",
 						"{\"nodes\":{\"root\":{\"routerType\":\"Sequence\",\"steps\":[{\"serviceUrl\":\"http://someservice.exmaple.com\"}]}},\"resources\":{\"limits\":{\"cpu\":\"100m\",\"memory\":\"500Mi\"},\"requests\":{\"cpu\":\"100m\",\"memory\":\"100Mi\"}}}",
 					},
@@ -210,8 +242,20 @@ func TestCreateInferenceGraphPodSpec(t *testing.T) {
 							v1.ResourceMemory: resource.MustParse("100Mi"),
 						},
 					},
+					ReadinessProbe: expectedReadinessProbe,
+					SecurityContext: &v1.SecurityContext{
+						Privileged:               proto.Bool(false),
+						RunAsNonRoot:             proto.Bool(true),
+						ReadOnlyRootFilesystem:   proto.Bool(true),
+						AllowPrivilegeEscalation: proto.Bool(false),
+						Capabilities: &v1.Capabilities{
+							Drop: []v1.Capability{v1.Capability("ALL")},
+						},
+					},
 				},
 			},
+			AutomountServiceAccountToken: proto.Bool(false),
+			ServiceAccountName:           "default",
 		},
 	}
 

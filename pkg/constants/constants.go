@@ -22,11 +22,11 @@ import (
 	"regexp"
 	"strings"
 
-	"knative.dev/serving/pkg/apis/autoscaling"
-
-	"knative.dev/pkg/network"
-
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"knative.dev/pkg/network"
+	"knative.dev/serving/pkg/apis/autoscaling"
 )
 
 // KServe Constants
@@ -42,16 +42,21 @@ var (
 
 // InferenceService Constants
 var (
-	InferenceServiceName          = "inferenceservice"
-	InferenceServiceAPIName       = "inferenceservices"
-	InferenceServicePodLabelKey   = KServeAPIGroupName + "/" + InferenceServiceName
-	InferenceServiceConfigMapName = "inferenceservice-config"
+	InferenceServiceName                  = "inferenceservice"
+	InferenceServiceAPIName               = "inferenceservices"
+	InferenceServicePodLabelKey           = KServeAPIGroupName + "/" + InferenceServiceName
+	InferenceServiceGenerationPodLabelKey = "isvc.generation"
+	InferenceServiceConfigMapName         = "inferenceservice-config"
 )
 
 // InferenceGraph Constants
 const (
 	RouterHeadersPropagateEnvVar = "PROPAGATE_HEADERS"
 	InferenceGraphLabel          = "serving.kserve.io/inferencegraph"
+	InferenceGraphAuthCRBName    = "kserve-inferencegraph-auth-verifiers"
+	InferenceGraphFinalizerName  = "inferencegraph.finalizers"
+	RouterReadinessEndpoint      = "/readyz"
+	RouterPort                   = 8080
 )
 
 // TrainedModel Constants
@@ -73,14 +78,22 @@ const (
 	AgentModelDirArgName  = "--model-dir"
 )
 
+// InferenceLogger Constants
+const (
+	LoggerCaBundleVolume  = "agent-ca-bundle"
+	LoggerCaCertMountPath = "/etc/tls/logger"
+)
+
 // InferenceService Annotations
 var (
 	InferenceServiceGKEAcceleratorAnnotationKey = KServeAPIGroupName + "/gke-accelerator"
 	DeploymentMode                              = KServeAPIGroupName + "/deploymentMode"
 	EnableRoutingTagAnnotationKey               = KServeAPIGroupName + "/enable-tag-routing"
+	DisableLocalModelKey                        = KServeAPIGroupName + "/disable-localmodel"
 	AutoscalerClass                             = KServeAPIGroupName + "/autoscalerClass"
 	AutoscalerMetrics                           = KServeAPIGroupName + "/metrics"
 	TargetUtilizationPercentage                 = KServeAPIGroupName + "/targetUtilizationPercentage"
+	InitialScaleAnnotationKey                   = KnativeAutoscalingAPIGroupName + "/initial-scale"
 	MinScaleAnnotationKey                       = KnativeAutoscalingAPIGroupName + "/min-scale"
 	MaxScaleAnnotationKey                       = KnativeAutoscalingAPIGroupName + "/max-scale"
 	RollOutDurationAnnotationKey                = KnativeServingAPIGroupName + "/rollout-duration"
@@ -91,6 +104,7 @@ var (
 	KServeContainerPrometheusPathKey            = "prometheus.kserve.io/path"
 	PrometheusPortAnnotationKey                 = "prometheus.io/port"
 	PrometheusPathAnnotationKey                 = "prometheus.io/path"
+	StorageReadonlyAnnotationKey                = "storage.kserve.io/readonly"
 	DefaultPrometheusPath                       = "/metrics"
 	QueueProxyAggregatePrometheusMetricsPort    = 9088
 	DefaultPodPrometheusPort                    = "9091"
@@ -106,6 +120,7 @@ var (
 	LoggerInternalAnnotationKey                      = InferenceServiceInternalAnnotationsPrefix + "/logger"
 	LoggerSinkUrlInternalAnnotationKey               = InferenceServiceInternalAnnotationsPrefix + "/logger-sink-url"
 	LoggerModeInternalAnnotationKey                  = InferenceServiceInternalAnnotationsPrefix + "/logger-mode"
+	LoggerMetadataHeadersInternalAnnotationKey       = InferenceServiceInternalAnnotationsPrefix + "/logger-metadata-headers"
 	BatcherInternalAnnotationKey                     = InferenceServiceInternalAnnotationsPrefix + "/batcher"
 	BatcherMaxBatchSizeInternalAnnotationKey         = InferenceServiceInternalAnnotationsPrefix + "/batcher-max-batchsize"
 	BatcherMaxLatencyInternalAnnotationKey           = InferenceServiceInternalAnnotationsPrefix + "/batcher-max-latency"
@@ -115,13 +130,24 @@ var (
 	AgentModelDirAnnotationKey                       = InferenceServiceInternalAnnotationsPrefix + "/modelDir"
 	PredictorHostAnnotationKey                       = InferenceServiceInternalAnnotationsPrefix + "/predictor-host"
 	PredictorProtocolAnnotationKey                   = InferenceServiceInternalAnnotationsPrefix + "/predictor-protocol"
+	LocalModelLabel                                  = InferenceServiceInternalAnnotationsPrefix + "/localmodel"
+	LocalModelSourceUriAnnotationKey                 = InferenceServiceInternalAnnotationsPrefix + "/localmodel-sourceuri"
+	LocalModelPVCNameAnnotationKey                   = InferenceServiceInternalAnnotationsPrefix + "/localmodel-pvc-name"
 )
 
 // kserve networking constants
 const (
-	NetworkVisibility      = "networking.kserve.io/visibility"
-	ClusterLocalVisibility = "cluster-local"
-	ClusterLocalDomain     = "svc.cluster.local"
+	NetworkVisibility              = "networking.kserve.io/visibility"
+	ClusterLocalVisibility         = "cluster-local"
+	ClusterLocalDomain             = "svc.cluster.local"
+	IsvcNameHeader                 = "KServe-Isvc-Name"
+	IsvcNamespaceHeader            = "KServe-Isvc-Namespace"
+	ODHKserveRawAuth               = "security.opendatahub.io/enable-auth"
+	ODHRouteEnabled                = "exposed"
+	ServingCertSecretSuffix        = "-serving-cert"
+	OpenshiftServingCertAnnotation = "service.beta.openshift.io/serving-cert-secret-name"
+	HostHeader                     = "Host"
+	GatewayName                    = "kserve-ingress-gateway"
 )
 
 // StorageSpec Constants
@@ -204,7 +230,21 @@ var (
 // GPU Constants
 const (
 	NvidiaGPUResourceType = "nvidia.com/gpu"
+	AmdGPUResourceType    = "amd.com/gpu"
+	IntelGPUResourceType  = "intel.com/gpu"
+	GaudiGPUResourceType  = "habana.ai/gaudi"
 )
+
+var (
+	CustomGPUResourceTypesAnnotationKey = KServeAPIGroupName + "/gpu-resource-types"
+)
+
+var GPUResourceTypeList = []string{
+	NvidiaGPUResourceType,
+	AmdGPUResourceType,
+	IntelGPUResourceType,
+	GaudiGPUResourceType,
+}
 
 // InferenceService Environment Variables
 const (
@@ -224,14 +264,22 @@ type InferenceServiceProtocol string
 
 // Knative constants
 const (
-	KnativeLocalGateway   = "knative-serving/knative-local-gateway"
-	KnativeIngressGateway = "knative-serving/knative-ingress-gateway"
-	VisibilityLabel       = "networking.knative.dev/visibility"
+	AutoscalerKey               = "autoscaler"
+	AutoscalerInitialScaleKey   = "initial-scale"
+	AutoscalerAllowZeroScaleKey = "allow-zero-initial-scale"
+	DefaultKnServingName        = "knative-serving"
+	DefaultKnServingNamespace   = "knative-serving"
+	KnativeLocalGateway         = "knative-serving/knative-local-gateway"
+	KnativeIngressGateway       = "knative-serving/knative-ingress-gateway"
+	VisibilityLabel             = "networking.knative.dev/visibility"
 )
 
 var (
 	LocalGatewayHost = "knative-local-gateway.istio-system.svc." + network.GetClusterDomainName()
+	IstioMeshGateway = "mesh"
 )
+
+const WorkerNodeSuffix = "worker"
 
 // InferenceService Component enums
 const (
@@ -301,6 +349,9 @@ const (
 
 	// TransformerContainerName transformer container name in collocation
 	TransformerContainerName = "transformer-container"
+
+	// WorkerContainerName is for worker node container
+	WorkerContainerName = "worker-container"
 )
 
 // DefaultModelLocalMountPath is where models will be mounted by the storage-initializer
@@ -330,13 +381,19 @@ const (
 )
 
 var (
+	// ServiceAnnotationDisallowedList is a list of annotations that are not allowed to be propagated to Knative
+	// revisions, which prevents the reconciliation loop to be triggered if the annotations is
+	// configured here are used.
 	ServiceAnnotationDisallowedList = []string{
+		autoscaling.InitialScaleAnnotationKey,
 		autoscaling.MinScaleAnnotationKey,
 		autoscaling.MaxScaleAnnotationKey,
 		StorageInitializerSourceUriInternalAnnotationKey,
 		"kubectl.kubernetes.io/last-applied-configuration",
+		"security.opendatahub.io/enable-auth",
 	}
-
+	// RevisionTemplateLabelDisallowedList is a list of labels that are not allowed to be propagated to Knative
+	// revisions, which prevents the reconciliation loop to be triggered if the labels is configured here are used.
 	RevisionTemplateLabelDisallowedList = []string{
 		VisibilityLabel,
 	}
@@ -368,15 +425,16 @@ const (
 
 // built-in runtime servers
 const (
-	SKLearnServer = "kserve-sklearnserver"
-	MLServer      = "kserve-mlserver"
-	TFServing     = "kserve-tensorflow-serving"
-	XGBServer     = "kserve-xgbserver"
-	TorchServe    = "kserve-torchserve"
-	TritonServer  = "kserve-tritonserver"
-	PMMLServer    = "kserve-pmmlserver"
-	LGBServer     = "kserve-lgbserver"
-	PaddleServer  = "kserve-paddleserver"
+	SKLearnServer     = "kserve-sklearnserver"
+	MLServer          = "kserve-mlserver"
+	TFServing         = "kserve-tensorflow-serving"
+	XGBServer         = "kserve-xgbserver"
+	TorchServe        = "kserve-torchserve"
+	TritonServer      = "kserve-tritonserver"
+	PMMLServer        = "kserve-pmmlserver"
+	LGBServer         = "kserve-lgbserver"
+	PaddleServer      = "kserve-paddleserver"
+	HuggingFaceServer = "kserve-huggingfaceserver"
 )
 
 const (
@@ -413,6 +471,17 @@ const (
 	SupportedModelMLFlow      = "mlflow"
 )
 
+// opendatahub rawDeployment Auth
+const (
+	OauthProxyPort                  = 8443
+	OauthProxyResourceMemoryLimit   = "128Mi"
+	OauthProxyResourceCPULimit      = "200m"
+	OauthProxyResourceMemoryRequest = "64Mi"
+	OauthProxyResourceCPURequest    = "100m"
+	OauthProxyImage                 = "registry.redhat.io/openshift4/ose-oauth-proxy@sha256:8507daed246d4d367704f7d7193233724acf1072572e1226ca063c066b858ecf"
+	DefaultServiceAccount           = "default"
+)
+
 type ProtocolVersion int
 
 const (
@@ -442,11 +511,56 @@ const (
 const (
 	IstioVirtualServiceKind = "VirtualService"
 	KnativeServiceKind      = "Service"
+	KnativeServingKind      = "KnativeServing"
+	HTTPRouteKind           = "HTTPRoute"
+	GatewayKind             = "Gateway"
+	ServiceKind             = "Service"
+)
+
+// Model Parallel Options
+const (
+	TensorParallelSizeEnvName   = "TENSOR_PARALLEL_SIZE"
+	PipelineParallelSizeEnvName = "PIPELINE_PARALLEL_SIZE"
+)
+
+// Model Parallel Options Default value
+const (
+	DefaultTensorParallelSize   = "1"
+	DefaultPipelineParallelSize = "2"
+)
+
+// Multi Node Labels
+var (
+	MultiNodeRoleLabelKey = "multinode/role"
+	MultiNodeHead         = "head"
+)
+
+// OpenShift constants
+const (
+	OpenShiftServiceCaConfigMapName = "openshift-service-ca.crt"
+)
+
+type ResourceType string
+
+const (
+	InferenceServiceResource ResourceType = "InferenceService"
+	InferenceGraphResource   ResourceType = "InferenceGraph"
 )
 
 // GetRawServiceLabel generate native service label
 func GetRawServiceLabel(service string) string {
 	return "isvc." + service
+}
+
+// GetRawWorkerServiceLabel generate native service label for worker
+func GetRawWorkerServiceLabel(service string) string {
+	return "isvc." + service + "-" + WorkerNodeSuffix
+}
+
+// GeHeadServiceName generate head service name
+func GeHeadServiceName(service string, isvcGeneration string) string {
+	isvcName := strings.TrimSuffix(service, "-predictor")
+	return isvcName + "-" + MultiNodeHead + "-" + isvcGeneration
 }
 
 func (e InferenceServiceComponent) String() string {
@@ -483,6 +597,10 @@ func DefaultPredictorServiceName(name string) string {
 
 func PredictorServiceName(name string) string {
 	return name + "-" + string(Predictor)
+}
+
+func PredictorWorkerServiceName(name string) string {
+	return name + "-" + string(Predictor) + "-" + WorkerNodeSuffix
 }
 
 func CanaryPredictorServiceName(name string) string {
@@ -551,6 +669,15 @@ func ExplainPrefix() string {
 	return "^/v1/models/[\\w-]+:explain$"
 }
 
+// FallbackPrefix returns the regex pattern to match any path
+func FallbackPrefix() string {
+	return "^/.*$"
+}
+
+func PathBasedExplainPrefix() string {
+	return "(/v1/models/[\\w-]+:explain)$"
+}
+
 func VirtualServiceHostname(name string, predictorHostName string) string {
 	index := strings.Index(predictorHostName, ".")
 	return name + predictorHostName[index:]
@@ -578,13 +705,13 @@ const portMatch = `(?::\d{1,5})?`
 // HostRegExp returns an ECMAScript regular expression to match either host or host:<any port>
 // for clusterLocalHost, we will also match the prefixes.
 func HostRegExp(host string) string {
-	localDomainSuffix := ".svc." + network.GetClusterDomainName()
+	localDomainSuffix := "(?i).svc." + network.GetClusterDomainName()
 	if !strings.HasSuffix(host, localDomainSuffix) {
 		return exact(regexp.QuoteMeta(host) + portMatch)
 	}
 	prefix := regexp.QuoteMeta(strings.TrimSuffix(host, localDomainSuffix))
-	clusterSuffix := regexp.QuoteMeta("." + network.GetClusterDomainName())
-	svcSuffix := regexp.QuoteMeta(".svc")
+	clusterSuffix := regexp.QuoteMeta("(?i)." + network.GetClusterDomainName())
+	svcSuffix := regexp.QuoteMeta("(?i).svc")
 	return exact(prefix + optional(svcSuffix+optional(clusterSuffix)) + portMatch)
 }
 
@@ -624,4 +751,25 @@ func GetProtocolVersionString(protocol ProtocolVersion) InferenceServiceProtocol
 	default:
 		return ProtocolUnknown
 	}
+}
+
+func GetRouterReadinessProbe() *corev1.Probe {
+	probe := &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: RouterReadinessEndpoint,
+				Port: intstr.IntOrString{
+					Type:   intstr.Int,
+					IntVal: RouterPort,
+				},
+				Scheme: corev1.URISchemeHTTP,
+			},
+		},
+		InitialDelaySeconds: 5,
+		TimeoutSeconds:      2,
+		PeriodSeconds:       5,
+		SuccessThreshold:    1,
+		FailureThreshold:    3,
+	}
+	return probe
 }
