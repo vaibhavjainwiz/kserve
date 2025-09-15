@@ -19,13 +19,13 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"context"
+	context "context"
 	time "time"
 
-	servingv1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
+	apisservingv1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	versioned "github.com/kserve/kserve/pkg/client/clientset/versioned"
 	internalinterfaces "github.com/kserve/kserve/pkg/client/informers/externalversions/internalinterfaces"
-	v1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
+	servingv1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	watch "k8s.io/apimachinery/pkg/watch"
@@ -36,7 +36,7 @@ import (
 // LocalModelCaches.
 type LocalModelCacheInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() v1alpha1.LocalModelCacheLister
+	Lister() servingv1alpha1.LocalModelCacheLister
 }
 
 type localModelCacheInformer struct {
@@ -62,16 +62,28 @@ func NewFilteredLocalModelCacheInformer(client versioned.Interface, namespace st
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.ServingV1alpha1().LocalModelCaches(namespace).List(context.TODO(), options)
+				return client.ServingV1alpha1().LocalModelCaches(namespace).List(context.Background(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.ServingV1alpha1().LocalModelCaches(namespace).Watch(context.TODO(), options)
+				return client.ServingV1alpha1().LocalModelCaches(namespace).Watch(context.Background(), options)
+			},
+			ListWithContextFunc: func(ctx context.Context, options v1.ListOptions) (runtime.Object, error) {
+				if tweakListOptions != nil {
+					tweakListOptions(&options)
+				}
+				return client.ServingV1alpha1().LocalModelCaches(namespace).List(ctx, options)
+			},
+			WatchFuncWithContext: func(ctx context.Context, options v1.ListOptions) (watch.Interface, error) {
+				if tweakListOptions != nil {
+					tweakListOptions(&options)
+				}
+				return client.ServingV1alpha1().LocalModelCaches(namespace).Watch(ctx, options)
 			},
 		},
-		&servingv1alpha1.LocalModelCache{},
+		&apisservingv1alpha1.LocalModelCache{},
 		resyncPeriod,
 		indexers,
 	)
@@ -82,9 +94,9 @@ func (f *localModelCacheInformer) defaultInformer(client versioned.Interface, re
 }
 
 func (f *localModelCacheInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&servingv1alpha1.LocalModelCache{}, f.defaultInformer)
+	return f.factory.InformerFor(&apisservingv1alpha1.LocalModelCache{}, f.defaultInformer)
 }
 
-func (f *localModelCacheInformer) Lister() v1alpha1.LocalModelCacheLister {
-	return v1alpha1.NewLocalModelCacheLister(f.Informer().GetIndexer())
+func (f *localModelCacheInformer) Lister() servingv1alpha1.LocalModelCacheLister {
+	return servingv1alpha1.NewLocalModelCacheLister(f.Informer().GetIndexer())
 }

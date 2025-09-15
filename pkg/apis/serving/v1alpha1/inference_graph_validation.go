@@ -18,8 +18,11 @@ package v1alpha1
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
+
+	utils "github.com/kserve/kserve/pkg/utils"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -72,7 +75,7 @@ var _ webhook.CustomValidator = &InferenceGraphValidator{}
 
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type
 func (v *InferenceGraphValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	ig, err := convertToInferenceGraph(obj)
+	ig, err := utils.Convert[*InferenceGraph](obj)
 	if err != nil {
 		validatorLogger.Error(err, "Unable to convert object to InferenceGraph")
 		return nil, err
@@ -83,7 +86,7 @@ func (v *InferenceGraphValidator) ValidateCreate(ctx context.Context, obj runtim
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
 func (v *InferenceGraphValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	ig, err := convertToInferenceGraph(newObj)
+	ig, err := utils.Convert[*InferenceGraph](newObj)
 	if err != nil {
 		validatorLogger.Error(err, "Unable to convert object to InferenceGraph")
 		return nil, err
@@ -94,7 +97,7 @@ func (v *InferenceGraphValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 
 // ValidateDelete implements webhook.Validator so a webhook will be registered for the type
 func (v *InferenceGraphValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	ig, err := convertToInferenceGraph(obj)
+	ig, err := utils.Convert[*InferenceGraph](obj)
 	if err != nil {
 		validatorLogger.Error(err, "Unable to convert object to InferenceGraph")
 		return nil, err
@@ -187,7 +190,7 @@ func validateInferenceGraphRouterRoot(ig *InferenceGraph) error {
 			return nil
 		}
 	}
-	return fmt.Errorf(RootNodeNotFoundError)
+	return errors.New(RootNodeNotFoundError)
 }
 
 // Validation of inference graph router type
@@ -208,13 +211,4 @@ func validateInferenceGraphSplitterWeight(ig *InferenceGraph) error {
 		}
 	}
 	return nil
-}
-
-// Convert runtime.Object into InferenceGraph
-func convertToInferenceGraph(obj runtime.Object) (*InferenceGraph, error) {
-	ig, ok := obj.(*InferenceGraph)
-	if !ok {
-		return nil, fmt.Errorf("expected an InferenceGraph object but got %T", obj)
-	}
-	return ig, nil
 }

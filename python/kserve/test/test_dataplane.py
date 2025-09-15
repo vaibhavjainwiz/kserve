@@ -21,6 +21,7 @@ from unittest import mock
 from unittest.mock import patch
 
 import avro
+import grpc
 import httpx
 import pytest
 import tomlkit
@@ -34,9 +35,11 @@ from kserve.protocol.rest.openai.types.openapi import (
 )
 from typing import AsyncIterator, Union
 from kserve.errors import InvalidInput, ModelNotFound
-from kserve.model import PredictorProtocol, PredictorConfig
+from kserve.model import PredictorProtocol
+from kserve.predictor_config import PredictorConfig
 from kserve.protocol.dataplane import DataPlane
-from kserve.protocol.rest.openai import CompletionRequest, OpenAICompletionModel
+from kserve import context as kserve_context
+from kserve.protocol.rest.openai import CompletionRequest, OpenAIGenerativeModel
 from kserve.model_repository import ModelRepository
 from kserve.ray import RayModel
 from test.test_server import (
@@ -121,7 +124,7 @@ class TestDataPlane:
     async def test_server_metadata(self):
         with open(pathlib.Path(__file__).parent.parent / "pyproject.toml") as toml_file:
             toml_config = tomlkit.load(toml_file)
-            version = toml_config["tool"]["poetry"]["version"].strip()
+            version = toml_config["project"]["version"].strip()
 
         dataplane = DataPlane(model_registry=ModelRepository())
         expected_metadata = {
@@ -423,7 +426,7 @@ class TestDataPlaneAvroCloudEvent:
 class TestDataPlaneOpenAI:
     MODEL_NAME = "TestModel"
 
-    class DummyOpenAIModel(OpenAICompletionModel):
+    class DummyOpenAIModel(OpenAIGenerativeModel):
         async def create_completion(
             self, params: CompletionRequest
         ) -> Union[Completion, AsyncIterator[Completion]]:
@@ -440,15 +443,15 @@ class TestDataPlaneOpenAI:
         repo.update(openai_model)
         dataplane = DataPlane(model_registry=repo)
 
-        with pytest.raises(InvalidInput) as exc:
+        with pytest.raises(ValueError) as exc:
             await dataplane.infer(
                 model_name=self.MODEL_NAME,
                 request={},
             )
 
         assert (
-            exc.value.reason
-            == "Model TestModel is of type OpenAICompletionModel. It does not support the infer method."
+            exc.value.args[0]
+            == "Model of type DummyOpenAIModel does not support inference"
         )
 
 
@@ -461,34 +464,33 @@ class TestDataplaneTransformer:
         httpx_mock.add_response(
             url=re.compile(f"https://{predictor_host}/*"), json={"status": "alive"}
         )
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V1.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-                predictor_use_ssl=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V1.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
+            predictor_use_ssl=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
+
         assert (await dataplane.ready()) is True
 
     @patch("kserve.protocol.dataplane.InferenceClientFactory.get_grpc_client")
     async def test_dataplane_grpc_with_ssl_enabled(self, mock_grpc_client):
         # scenario: getting a 2xx response from predictor with ssl enabled
         predictor_host = "ready.host"
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.GRPC_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-                predictor_use_ssl=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.GRPC_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
+            predictor_use_ssl=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         mock_is_server_ready = mock.AsyncMock(return_value=True)
         mock_grpc_client.return_value.is_server_ready = mock_is_server_ready
         assert (await dataplane.ready()) is True
@@ -502,16 +504,15 @@ class TestDataplaneTransformer:
         httpx_mock.add_response(
             url=re.compile(f"http://{predictor_host}/*"), json={"status": "alive"}
         )
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V1.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V1.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         assert (await dataplane.ready()) is True
 
         # scenario: not a 2xx response from predictor
@@ -519,16 +520,15 @@ class TestDataplaneTransformer:
         httpx_mock.add_response(
             url=re.compile(f"http://{predictor_host}/*"), status_code=500
         )
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V1.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V1.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         with pytest.raises(httpx.HTTPStatusError):
             await dataplane.ready()
 
@@ -538,16 +538,15 @@ class TestDataplaneTransformer:
         httpx_mock.add_response(
             url=re.compile(f"http://{predictor_host}/v2/*"), json={"ready": True}
         )
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         assert (await dataplane.ready()) is True
 
         # scenario: getting a 2xx response from predictor and server not ready
@@ -555,16 +554,15 @@ class TestDataplaneTransformer:
         httpx_mock.add_response(
             url=re.compile(f"http://{predictor_host}/v2/*"), json={"ready": False}
         )
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         assert (await dataplane.ready()) is False
 
         # scenario: not a 2xx response from predictor
@@ -572,16 +570,15 @@ class TestDataplaneTransformer:
         httpx_mock.add_response(
             url=re.compile(f"http://{predictor_host}/v2/*"), status_code=500
         )
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         with pytest.raises(httpx.HTTPStatusError):
             await dataplane.ready()
 
@@ -589,16 +586,15 @@ class TestDataplaneTransformer:
     async def test_server_readiness_grpc_v2(self, mock_grpc_client):
         # scenario: getting a 2xx response from predictor
         predictor_host = "ready.host"
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.GRPC_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.GRPC_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         mock_is_server_ready = mock.AsyncMock(return_value=True)
         mock_grpc_client.return_value.is_server_ready = mock_is_server_ready
         assert (await dataplane.ready()) is True
@@ -608,16 +604,15 @@ class TestDataplaneTransformer:
 
         # scenario: getting a 2xx response from predictor and server not ready
         predictor_host = "not-ready.host"
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.GRPC_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.GRPC_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         mock_is_server_ready = mock.AsyncMock(return_value=False)
         mock_grpc_client.return_value.is_server_ready = mock_is_server_ready
         assert (await dataplane.ready()) is False
@@ -631,16 +626,15 @@ class TestDataplaneTransformer:
         httpx_mock.add_response(
             url=re.compile(f"http://{predictor_host}/v1/*"), json={"ready": True}
         )
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V1.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V1.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         # Transformer model ready
         ready_model = DummyModel("ReadyModel")
         dataplane._model_registry.update(ready_model)
@@ -651,16 +645,15 @@ class TestDataplaneTransformer:
         httpx_mock.add_response(
             url=re.compile(f"http://{predictor_host}/v1/*"), json={"ready": False}
         )
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V1.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V1.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         # Transformer model ready
         not_ready_model = DummyModel("NotReadyModel")
         dataplane._model_registry.update(not_ready_model)
@@ -671,16 +664,15 @@ class TestDataplaneTransformer:
         httpx_mock.add_response(
             url=re.compile(f"http://{predictor_host}/v1/*"), status_code=503
         )
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V1.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V1.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         # Transformer model is not ready
         not_ready_model = DummyModel("NotReadyModel")
         dataplane._model_registry.update(not_ready_model)
@@ -689,78 +681,96 @@ class TestDataplaneTransformer:
     async def test_model_readiness_v2(self, httpx_mock):
         # scenario: getting a 2xx response from predictor
         predictor_host = "ready.host"
-        httpx_mock.add_response(
-            url=re.compile(f"http://{predictor_host}/v2/*"), json={"ready": True}
+        httpx_mock.add_response(url=re.compile(f"http://{predictor_host}/v2/*"))
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
-        )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         # Transformer model ready
         ready_model = DummyModel("ReadyModel")
         dataplane._model_registry.update(ready_model)
         assert (await dataplane.model_ready(ready_model.name)) is True
 
-        # scenario: getting a 2xx response from predictor and model not ready
-        predictor_host = "ready.host"
+        # scenario: getting a 400 response from predictor and model not ready
+        predictor_host = "triton-not-ready.host"
+        # Triton returns a non-200 response if model is not ready
         httpx_mock.add_response(
-            url=re.compile(f"http://{predictor_host}/v2/*"), json={"ready": False}
+            url=re.compile(f"http://{predictor_host}/v2/*"), status_code=400
         )
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         # Transformer model ready
         not_ready_model = DummyModel("NotReadyModel")
         dataplane._model_registry.update(not_ready_model)
         assert (await dataplane.model_ready(not_ready_model.name)) is False
 
-        # scenario: not a 2xx response from predictor
+        # scenario: 503 response from predictor
+        # According to V2 protocol, 200 status code indicates true and a 4xx status code indicates false.
+        # The HTTP response body should be empty.
+        # However, KServe returns 503 when not ready
         predictor_host = "not-ready.host"
         httpx_mock.add_response(
             url=re.compile(f"http://{predictor_host}/v2/*"), status_code=503
         )
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         # Transformer model is not ready
         not_ready_model = DummyModel("NotReadyModel")
         dataplane._model_registry.update(not_ready_model)
         assert await dataplane.model_ready(not_ready_model.name) is False
 
+        # Connection error
+        predictor_host = "not-reachable.host"
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
+        )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
+        # Transformer model is not ready
+        not_ready_model = DummyModel("NotReadyModel")
+        dataplane._model_registry.update(not_ready_model)
+        httpx_mock.add_exception(
+            url=re.compile(f"http://{predictor_host}/v2/*"),
+            exception=httpx.ConnectError("All connection attempts failed"),
+        )
+        assert (await dataplane.model_ready(not_ready_model.name)) is False
+
     @patch("kserve.protocol.dataplane.InferenceClientFactory.get_grpc_client")
     async def test_model_readiness_grpc_v2(self, mock_grpc_client):
         # scenario: getting a 2xx response from predictor
         predictor_host = "ready.host"
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.GRPC_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.GRPC_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
         # Transformer model ready
         ready_model = DummyModel("ReadyModel")
         dataplane._model_registry.update(ready_model)
@@ -773,17 +783,16 @@ class TestDataplaneTransformer:
 
         # scenario: getting a 2xx response from predictor and server not ready
         predictor_host = "not-ready.host"
-        dataplane = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.GRPC_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=True,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.GRPC_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
         )
-        # Transformer model ready
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
+        # Transformer model is not ready
         not_ready_model = DummyModel("NotReadyModel")
         dataplane._model_registry.update(not_ready_model)
         mock_is_model_ready = mock.AsyncMock(return_value=False)
@@ -793,6 +802,21 @@ class TestDataplaneTransformer:
             url=predictor_host, timeout=5, retries=2, use_ssl=False
         )
 
+        # Connection error
+        predictor_host = "not-reachable.host"
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.GRPC_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=True,
+        )
+        kserve_context.set_predictor_config(predictor_config)
+        dataplane = DataPlane(model_registry=ModelRepository())
+        dataplane._model_registry.update(ready_model)
+        mock_grpc_client.side_effect = grpc.RpcError("Mocked exception")
+        assert (await dataplane.model_ready(ready_model.name)) is False
+
     @patch("kserve.protocol.dataplane.InferenceClientFactory.get_grpc_client")
     @patch("kserve.protocol.dataplane.InferenceClientFactory.get_rest_client")
     async def test_dataplane_with_predictor_health_check_false(
@@ -800,26 +824,24 @@ class TestDataplaneTransformer:
     ):
         # Inference client should not be created when predictor_health_check is False
         predictor_host = "ready.host"
-        _ = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.GRPC_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=False,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.GRPC_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=False,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        _ = DataPlane(model_registry=ModelRepository())
         mock_grpc_client.assert_not_called()
 
-        _ = DataPlane(
-            model_registry=ModelRepository(),
-            predictor_config=PredictorConfig(
-                predictor_host=predictor_host,
-                predictor_protocol=PredictorProtocol.REST_V2.value,
-                predictor_request_retries=2,
-                predictor_request_timeout_seconds=5,
-                predictor_health_check=False,
-            ),
+        predictor_config = PredictorConfig(
+            predictor_host=predictor_host,
+            predictor_protocol=PredictorProtocol.REST_V2.value,
+            predictor_request_retries=2,
+            predictor_request_timeout_seconds=5,
+            predictor_health_check=False,
         )
+        kserve_context.set_predictor_config(predictor_config)
+        _ = DataPlane(model_registry=ModelRepository())
         mock_rest_client.assert_not_called()

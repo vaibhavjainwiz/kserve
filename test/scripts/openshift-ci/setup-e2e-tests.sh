@@ -60,12 +60,14 @@ fi
 
 echo "Installing KServe Python SDK ..."
 pushd $PROJECT_ROOT >/dev/null
-  ./test/scripts/gh-actions/setup-poetry.sh
-  ./test/scripts/gh-actions/check-poetry-lockfile.sh
+  ./test/scripts/gh-actions/setup-uv.sh
 popd
 pushd $PROJECT_ROOT/python/kserve >/dev/null
-  poetry install --with=test --no-interaction
+  uv sync --active --group test
+  uv pip install timeout-sampler
 popd
+
+$MY_PATH/deploy.cma.sh
 
 # Install KServe stack
 if [ "$1" != "raw" ]; then
@@ -96,7 +98,11 @@ if [ "$1" == "raw" ]; then
   oc patch DataScienceCluster test-dsc --type='json' -p='[{"op": "replace", "path": "/spec/components/kserve/defaultDeploymentMode", "value": "RawDeployment"}]'
 else
   export OPENSHIFT_INGRESS_DOMAIN=$(oc get ingresses.config cluster -o jsonpath='{.spec.domain}')
-  oc patch configmap inferenceservice-config -n kserve --patch-file <(cat config/overlays/test/configmap/inferenceservice-openshift-ci-serverless.yaml | envsubst)
+  if [ "$1" == "graph" ]; then
+    oc patch configmap inferenceservice-config -n kserve --patch-file <(cat config/overlays/test/configmap/inferenceservice-openshift-ci-serverless.yaml | envsubst)
+  else 
+    oc patch configmap inferenceservice-config -n kserve --patch-file <(cat config/overlays/test/configmap/inferenceservice-openshift-ci-serverless-predictor.yaml | envsubst)
+  fi
 fi
 
 # Wait until KServe starts
@@ -108,14 +114,6 @@ if [ "$1" != "raw" ]; then
   curl -sL https://raw.githubusercontent.com/Kuadrant/authorino-operator/main/utils/install.sh | sed "s|kubectl|oc|" | 
     bash -s -- -v 0.16.0
 
-  # kserve-local-gateway
-  curl https://raw.githubusercontent.com/opendatahub-io/opendatahub-operator/bde4b4e8478b5d03195e2777b9d550922e3cdcbc/components/kserve/resources/servicemesh/routing/istio-kserve-local-gateway.tmpl.yaml |
-    sed "s/{{ .ControlPlane.Namespace }}/istio-system/g" |
-    oc create -f -
-  
-  curl https://raw.githubusercontent.com/opendatahub-io/opendatahub-operator/bde4b4e8478b5d03195e2777b9d550922e3cdcbc/components/kserve/resources/servicemesh/routing/kserve-local-gateway-svc.tmpl.yaml |
-    sed "s/{{ .ControlPlane.Namespace }}/istio-system/g" |
-    oc create -f -
 fi
 
 echo "Installing ODH Model Controller"
@@ -124,9 +122,40 @@ kustomize build $PROJECT_ROOT/test/scripts/openshift-ci |
     oc apply -n kserve -f -
   oc wait --for=condition=ready pod -l app=odh-model-controller -n kserve --timeout=300s
 
+# Configure certs for the python requests by getting the CA cert from the kserve controller pod 
+export CA_CERT_PATH="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+# The run-e2e-tests script expects the CA cert to be in /tmp/ca.crt
+oc exec deploy/kserve-controller-manager -n kserve -- cat $CA_CERT_PATH > /tmp/ca.crt
+
 echo "Add testing models to minio storage ..." # Reference: config/overlays/test/minio/minio-init-job.yaml
-oc expose service minio-service -n kserve && sleep 5
+
+# Wait for minio pod to be ready
+echo "Waiting for minio pod to be ready..."
+oc wait --for=condition=ready pod -l app=minio -n kserve --timeout=300s
+
+# Expose minio service and get route
+oc expose service minio-service -n kserve
 MINIO_ROUTE=$(oc get routes -n kserve minio-service -o jsonpath="{.spec.host}")
+
+# Wait for minio endpoint to be accessible
+echo "Waiting for minio endpoint to be accessible..."
+timeout=60
+counter=0
+while [ $counter -lt $timeout ]; do
+  if curl -f -s "http://$MINIO_ROUTE/minio/health/live" >/dev/null 2>&1; then
+    echo "Minio is ready!"
+    break
+  fi
+  echo "Waiting for minio to be ready... ($counter/$timeout)"
+  sleep 2
+  counter=$((counter + 2))
+done
+
+if [ $counter -ge $timeout ]; then
+  echo "Timeout waiting for minio to be ready"
+  exit 1
+fi
+
 mc alias set storage http://$MINIO_ROUTE minio minio123
 
 if ! mc ls storage/example-models >/dev/null 2>&1; then
@@ -199,5 +228,11 @@ spec:
   - Ingress
   - Egress
 EOF
+
+if [[ $1 =~ "kserve_on_openshift" ]]; then
+  echo "Configuring minio tls"
+  ${PROJECT_ROOT}/test/scripts/openshift-ci/tls/setup-minio-tls-custom-cert.sh
+  ${PROJECT_ROOT}/test/scripts/openshift-ci/tls/setup-minio-tls-serving-cert.sh
+fi
 
 echo "Setup complete"

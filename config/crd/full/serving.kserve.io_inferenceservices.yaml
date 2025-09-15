@@ -735,6 +735,8 @@ spec:
                                     - port
                                   type: object
                               type: object
+                            stopSignal:
+                              type: string
                           type: object
                         livenessProbe:
                           properties:
@@ -1189,6 +1191,229 @@ spec:
                         workingDir:
                           type: string
                       type: object
+                    autoScaling:
+                      properties:
+                        behavior:
+                          properties:
+                            scaleDown:
+                              properties:
+                                policies:
+                                  items:
+                                    properties:
+                                      periodSeconds:
+                                        format: int32
+                                        type: integer
+                                      type:
+                                        type: string
+                                      value:
+                                        format: int32
+                                        type: integer
+                                    required:
+                                      - periodSeconds
+                                      - type
+                                      - value
+                                    type: object
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                selectPolicy:
+                                  type: string
+                                stabilizationWindowSeconds:
+                                  format: int32
+                                  type: integer
+                                tolerance:
+                                  anyOf:
+                                    - type: integer
+                                    - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                            scaleUp:
+                              properties:
+                                policies:
+                                  items:
+                                    properties:
+                                      periodSeconds:
+                                        format: int32
+                                        type: integer
+                                      type:
+                                        type: string
+                                      value:
+                                        format: int32
+                                        type: integer
+                                    required:
+                                      - periodSeconds
+                                      - type
+                                      - value
+                                    type: object
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                selectPolicy:
+                                  type: string
+                                stabilizationWindowSeconds:
+                                  format: int32
+                                  type: integer
+                                tolerance:
+                                  anyOf:
+                                    - type: integer
+                                    - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          type: object
+                        metrics:
+                          items:
+                            properties:
+                              external:
+                                properties:
+                                  authenticationRef:
+                                    properties:
+                                      authModes:
+                                        type: string
+                                      authenticationRef:
+                                        properties:
+                                          name:
+                                            type: string
+                                        required:
+                                          - name
+                                        type: object
+                                    required:
+                                      - authenticationRef
+                                    type: object
+                                  metric:
+                                    properties:
+                                      backend:
+                                        enum:
+                                          - prometheus
+                                          - graphite
+                                        type: string
+                                      namespace:
+                                        type: string
+                                      query:
+                                        type: string
+                                      serverAddress:
+                                        type: string
+                                    type: object
+                                  target:
+                                    properties:
+                                      averageUtilization:
+                                        format: int32
+                                        type: integer
+                                      averageValue:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      type:
+                                        enum:
+                                          - Utilization
+                                          - Value
+                                          - AverageValue
+                                        type: string
+                                      value:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    type: object
+                                required:
+                                  - metric
+                                  - target
+                                type: object
+                              podmetric:
+                                properties:
+                                  metric:
+                                    properties:
+                                      backend:
+                                        enum:
+                                          - opentelemetry
+                                        type: string
+                                      metricNames:
+                                        items:
+                                          type: string
+                                        type: array
+                                      operationOverTime:
+                                        type: string
+                                      query:
+                                        type: string
+                                      serverAddress:
+                                        type: string
+                                    type: object
+                                  target:
+                                    properties:
+                                      averageUtilization:
+                                        format: int32
+                                        type: integer
+                                      averageValue:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      type:
+                                        enum:
+                                          - Utilization
+                                          - Value
+                                          - AverageValue
+                                        type: string
+                                      value:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    type: object
+                                required:
+                                  - metric
+                                  - target
+                                type: object
+                              resource:
+                                properties:
+                                  name:
+                                    enum:
+                                      - cpu
+                                      - memory
+                                    type: string
+                                  target:
+                                    properties:
+                                      averageUtilization:
+                                        format: int32
+                                        type: integer
+                                      averageValue:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      type:
+                                        enum:
+                                          - Utilization
+                                          - Value
+                                          - AverageValue
+                                        type: string
+                                      value:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    type: object
+                                required:
+                                  - name
+                                  - target
+                                type: object
+                              type:
+                                enum:
+                                  - Resource
+                                  - External
+                                  - PodMetric
+                                type: string
+                            required:
+                              - type
+                            type: object
+                          type: array
+                      type: object
                     automountServiceAccountToken:
                       type: boolean
                     batcher:
@@ -1440,6 +1665,8 @@ spec:
                                       - port
                                     type: object
                                 type: object
+                              stopSignal:
+                                type: string
                             type: object
                           livenessProbe:
                             properties:
@@ -2194,6 +2421,8 @@ spec:
                                       - port
                                     type: object
                                 type: object
+                              stopSignal:
+                                type: string
                             type: object
                           livenessProbe:
                             properties:
@@ -2646,6 +2875,10 @@ spec:
                       type: object
                     logger:
                       properties:
+                        metadataAnnotations:
+                          items:
+                            type: string
+                          type: array
                         metadataHeaders:
                           items:
                             type: string
@@ -2656,12 +2889,27 @@ spec:
                             - request
                             - response
                           type: string
+                        storage:
+                          properties:
+                            key:
+                              type: string
+                            parameters:
+                              additionalProperties:
+                                type: string
+                              type: object
+                            path:
+                              type: string
+                            serviceAccountName:
+                              type: string
+                          type: object
                         url:
                           type: string
                       type: object
                     maxReplicas:
+                      format: int32
                       type: integer
                     minReplicas:
+                      format: int32
                       type: integer
                     nodeName:
                       type: string
@@ -2715,6 +2963,39 @@ spec:
                       x-kubernetes-list-map-keys:
                         - name
                       x-kubernetes-list-type: map
+                    resources:
+                      properties:
+                        claims:
+                          items:
+                            properties:
+                              name:
+                                type: string
+                              request:
+                                type: string
+                            required:
+                              - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                            - name
+                          x-kubernetes-list-type: map
+                        limits:
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          type: object
+                        requests:
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          type: object
+                      type: object
                     restartPolicy:
                       type: string
                     runtimeClassName:
@@ -2726,7 +3007,14 @@ spec:
                         - concurrency
                         - rps
                       type: string
+                    scaleMetricType:
+                      enum:
+                        - Utilization
+                        - Value
+                        - AverageValue
+                      type: string
                     scaleTarget:
+                      format: int32
                       type: integer
                     schedulerName:
                       type: string
@@ -2766,6 +3054,8 @@ spec:
                         runAsUser:
                           format: int64
                           type: integer
+                        seLinuxChangePolicy:
+                          type: string
                         seLinuxOptions:
                           properties:
                             level:
@@ -4139,6 +4429,229 @@ spec:
                       additionalProperties:
                         type: string
                       type: object
+                    autoScaling:
+                      properties:
+                        behavior:
+                          properties:
+                            scaleDown:
+                              properties:
+                                policies:
+                                  items:
+                                    properties:
+                                      periodSeconds:
+                                        format: int32
+                                        type: integer
+                                      type:
+                                        type: string
+                                      value:
+                                        format: int32
+                                        type: integer
+                                    required:
+                                      - periodSeconds
+                                      - type
+                                      - value
+                                    type: object
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                selectPolicy:
+                                  type: string
+                                stabilizationWindowSeconds:
+                                  format: int32
+                                  type: integer
+                                tolerance:
+                                  anyOf:
+                                    - type: integer
+                                    - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                            scaleUp:
+                              properties:
+                                policies:
+                                  items:
+                                    properties:
+                                      periodSeconds:
+                                        format: int32
+                                        type: integer
+                                      type:
+                                        type: string
+                                      value:
+                                        format: int32
+                                        type: integer
+                                    required:
+                                      - periodSeconds
+                                      - type
+                                      - value
+                                    type: object
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                selectPolicy:
+                                  type: string
+                                stabilizationWindowSeconds:
+                                  format: int32
+                                  type: integer
+                                tolerance:
+                                  anyOf:
+                                    - type: integer
+                                    - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          type: object
+                        metrics:
+                          items:
+                            properties:
+                              external:
+                                properties:
+                                  authenticationRef:
+                                    properties:
+                                      authModes:
+                                        type: string
+                                      authenticationRef:
+                                        properties:
+                                          name:
+                                            type: string
+                                        required:
+                                          - name
+                                        type: object
+                                    required:
+                                      - authenticationRef
+                                    type: object
+                                  metric:
+                                    properties:
+                                      backend:
+                                        enum:
+                                          - prometheus
+                                          - graphite
+                                        type: string
+                                      namespace:
+                                        type: string
+                                      query:
+                                        type: string
+                                      serverAddress:
+                                        type: string
+                                    type: object
+                                  target:
+                                    properties:
+                                      averageUtilization:
+                                        format: int32
+                                        type: integer
+                                      averageValue:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      type:
+                                        enum:
+                                          - Utilization
+                                          - Value
+                                          - AverageValue
+                                        type: string
+                                      value:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    type: object
+                                required:
+                                  - metric
+                                  - target
+                                type: object
+                              podmetric:
+                                properties:
+                                  metric:
+                                    properties:
+                                      backend:
+                                        enum:
+                                          - opentelemetry
+                                        type: string
+                                      metricNames:
+                                        items:
+                                          type: string
+                                        type: array
+                                      operationOverTime:
+                                        type: string
+                                      query:
+                                        type: string
+                                      serverAddress:
+                                        type: string
+                                    type: object
+                                  target:
+                                    properties:
+                                      averageUtilization:
+                                        format: int32
+                                        type: integer
+                                      averageValue:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      type:
+                                        enum:
+                                          - Utilization
+                                          - Value
+                                          - AverageValue
+                                        type: string
+                                      value:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    type: object
+                                required:
+                                  - metric
+                                  - target
+                                type: object
+                              resource:
+                                properties:
+                                  name:
+                                    enum:
+                                      - cpu
+                                      - memory
+                                    type: string
+                                  target:
+                                    properties:
+                                      averageUtilization:
+                                        format: int32
+                                        type: integer
+                                      averageValue:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      type:
+                                        enum:
+                                          - Utilization
+                                          - Value
+                                          - AverageValue
+                                        type: string
+                                      value:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    type: object
+                                required:
+                                  - name
+                                  - target
+                                type: object
+                              type:
+                                enum:
+                                  - Resource
+                                  - External
+                                  - PodMetric
+                                type: string
+                            required:
+                              - type
+                            type: object
+                          type: array
+                      type: object
                     automountServiceAccountToken:
                       type: boolean
                     batcher:
@@ -4390,6 +4903,8 @@ spec:
                                       - port
                                     type: object
                                 type: object
+                              stopSignal:
+                                type: string
                             type: object
                           livenessProbe:
                             properties:
@@ -5134,6 +5649,8 @@ spec:
                                     - port
                                   type: object
                               type: object
+                            stopSignal:
+                              type: string
                           type: object
                         livenessProbe:
                           properties:
@@ -5831,6 +6348,8 @@ spec:
                                       - port
                                     type: object
                                 type: object
+                              stopSignal:
+                                type: string
                             type: object
                           livenessProbe:
                             properties:
@@ -6514,6 +7033,8 @@ spec:
                                     - port
                                   type: object
                               type: object
+                            stopSignal:
+                              type: string
                           type: object
                         livenessProbe:
                           properties:
@@ -6970,6 +7491,10 @@ spec:
                       type: object
                     logger:
                       properties:
+                        metadataAnnotations:
+                          items:
+                            type: string
+                          type: array
                         metadataHeaders:
                           items:
                             type: string
@@ -6980,12 +7505,27 @@ spec:
                             - request
                             - response
                           type: string
+                        storage:
+                          properties:
+                            key:
+                              type: string
+                            parameters:
+                              additionalProperties:
+                                type: string
+                              type: object
+                            path:
+                              type: string
+                            serviceAccountName:
+                              type: string
+                          type: object
                         url:
                           type: string
                       type: object
                     maxReplicas:
+                      format: int32
                       type: integer
                     minReplicas:
+                      format: int32
                       type: integer
                     model:
                       properties:
@@ -7220,6 +7760,8 @@ spec:
                                     - port
                                   type: object
                               type: object
+                            stopSignal:
+                              type: string
                           type: object
                         livenessProbe:
                           properties:
@@ -7925,6 +8467,8 @@ spec:
                                     - port
                                   type: object
                               type: object
+                            stopSignal:
+                              type: string
                           type: object
                         livenessProbe:
                           properties:
@@ -8625,6 +9169,8 @@ spec:
                                     - port
                                   type: object
                               type: object
+                            stopSignal:
+                              type: string
                           type: object
                         livenessProbe:
                           properties:
@@ -9312,6 +9858,8 @@ spec:
                                     - port
                                   type: object
                               type: object
+                            stopSignal:
+                              type: string
                           type: object
                         livenessProbe:
                           properties:
@@ -10006,6 +10554,8 @@ spec:
                                     - port
                                   type: object
                               type: object
+                            stopSignal:
+                              type: string
                           type: object
                         livenessProbe:
                           properties:
@@ -10485,6 +11035,39 @@ spec:
                       x-kubernetes-list-map-keys:
                         - name
                       x-kubernetes-list-type: map
+                    resources:
+                      properties:
+                        claims:
+                          items:
+                            properties:
+                              name:
+                                type: string
+                              request:
+                                type: string
+                            required:
+                              - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                            - name
+                          x-kubernetes-list-type: map
+                        limits:
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          type: object
+                        requests:
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          type: object
+                      type: object
                     restartPolicy:
                       type: string
                     runtimeClassName:
@@ -10496,7 +11079,14 @@ spec:
                         - concurrency
                         - rps
                       type: string
+                    scaleMetricType:
+                      enum:
+                        - Utilization
+                        - Value
+                        - AverageValue
+                      type: string
                     scaleTarget:
+                      format: int32
                       type: integer
                     schedulerName:
                       type: string
@@ -10536,6 +11126,8 @@ spec:
                         runAsUser:
                           format: int64
                           type: integer
+                        seLinuxChangePolicy:
+                          type: string
                         seLinuxOptions:
                           properties:
                             level:
@@ -10830,6 +11422,8 @@ spec:
                                     - port
                                   type: object
                               type: object
+                            stopSignal:
+                              type: string
                           type: object
                         livenessProbe:
                           properties:
@@ -11519,6 +12113,8 @@ spec:
                                     - port
                                   type: object
                               type: object
+                            stopSignal:
+                              type: string
                           type: object
                         livenessProbe:
                           properties:
@@ -12286,6 +12882,8 @@ spec:
                                     - port
                                   type: object
                               type: object
+                            stopSignal:
+                              type: string
                           type: object
                         livenessProbe:
                           properties:
@@ -14201,6 +14799,8 @@ spec:
                                           - port
                                         type: object
                                     type: object
+                                  stopSignal:
+                                    type: string
                                 type: object
                               livenessProbe:
                                 properties:
@@ -14908,6 +15508,8 @@ spec:
                                           - port
                                         type: object
                                     type: object
+                                  stopSignal:
+                                    type: string
                                 type: object
                               livenessProbe:
                                 properties:
@@ -15623,6 +16225,8 @@ spec:
                                           - port
                                         type: object
                                     type: object
+                                  stopSignal:
+                                    type: string
                                 type: object
                               livenessProbe:
                                 properties:
@@ -16125,6 +16729,39 @@ spec:
                           x-kubernetes-list-map-keys:
                             - name
                           x-kubernetes-list-type: map
+                        resources:
+                          properties:
+                            claims:
+                              items:
+                                properties:
+                                  name:
+                                    type: string
+                                  request:
+                                    type: string
+                                required:
+                                  - name
+                                type: object
+                              type: array
+                              x-kubernetes-list-map-keys:
+                                - name
+                              x-kubernetes-list-type: map
+                            limits:
+                              additionalProperties:
+                                anyOf:
+                                  - type: integer
+                                  - type: string
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              type: object
+                            requests:
+                              additionalProperties:
+                                anyOf:
+                                  - type: integer
+                                  - type: string
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              type: object
+                          type: object
                         restartPolicy:
                           type: string
                         runtimeClassName:
@@ -16167,6 +16804,8 @@ spec:
                             runAsUser:
                               format: int64
                               type: integer
+                            seLinuxChangePolicy:
+                              type: string
                             seLinuxOptions:
                               properties:
                                 level:
@@ -17324,6 +17963,8 @@ spec:
                                     - port
                                   type: object
                               type: object
+                            stopSignal:
+                              type: string
                           type: object
                         livenessProbe:
                           properties:
@@ -18227,6 +18868,229 @@ spec:
                       additionalProperties:
                         type: string
                       type: object
+                    autoScaling:
+                      properties:
+                        behavior:
+                          properties:
+                            scaleDown:
+                              properties:
+                                policies:
+                                  items:
+                                    properties:
+                                      periodSeconds:
+                                        format: int32
+                                        type: integer
+                                      type:
+                                        type: string
+                                      value:
+                                        format: int32
+                                        type: integer
+                                    required:
+                                      - periodSeconds
+                                      - type
+                                      - value
+                                    type: object
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                selectPolicy:
+                                  type: string
+                                stabilizationWindowSeconds:
+                                  format: int32
+                                  type: integer
+                                tolerance:
+                                  anyOf:
+                                    - type: integer
+                                    - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                            scaleUp:
+                              properties:
+                                policies:
+                                  items:
+                                    properties:
+                                      periodSeconds:
+                                        format: int32
+                                        type: integer
+                                      type:
+                                        type: string
+                                      value:
+                                        format: int32
+                                        type: integer
+                                    required:
+                                      - periodSeconds
+                                      - type
+                                      - value
+                                    type: object
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                selectPolicy:
+                                  type: string
+                                stabilizationWindowSeconds:
+                                  format: int32
+                                  type: integer
+                                tolerance:
+                                  anyOf:
+                                    - type: integer
+                                    - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
+                          type: object
+                        metrics:
+                          items:
+                            properties:
+                              external:
+                                properties:
+                                  authenticationRef:
+                                    properties:
+                                      authModes:
+                                        type: string
+                                      authenticationRef:
+                                        properties:
+                                          name:
+                                            type: string
+                                        required:
+                                          - name
+                                        type: object
+                                    required:
+                                      - authenticationRef
+                                    type: object
+                                  metric:
+                                    properties:
+                                      backend:
+                                        enum:
+                                          - prometheus
+                                          - graphite
+                                        type: string
+                                      namespace:
+                                        type: string
+                                      query:
+                                        type: string
+                                      serverAddress:
+                                        type: string
+                                    type: object
+                                  target:
+                                    properties:
+                                      averageUtilization:
+                                        format: int32
+                                        type: integer
+                                      averageValue:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      type:
+                                        enum:
+                                          - Utilization
+                                          - Value
+                                          - AverageValue
+                                        type: string
+                                      value:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    type: object
+                                required:
+                                  - metric
+                                  - target
+                                type: object
+                              podmetric:
+                                properties:
+                                  metric:
+                                    properties:
+                                      backend:
+                                        enum:
+                                          - opentelemetry
+                                        type: string
+                                      metricNames:
+                                        items:
+                                          type: string
+                                        type: array
+                                      operationOverTime:
+                                        type: string
+                                      query:
+                                        type: string
+                                      serverAddress:
+                                        type: string
+                                    type: object
+                                  target:
+                                    properties:
+                                      averageUtilization:
+                                        format: int32
+                                        type: integer
+                                      averageValue:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      type:
+                                        enum:
+                                          - Utilization
+                                          - Value
+                                          - AverageValue
+                                        type: string
+                                      value:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    type: object
+                                required:
+                                  - metric
+                                  - target
+                                type: object
+                              resource:
+                                properties:
+                                  name:
+                                    enum:
+                                      - cpu
+                                      - memory
+                                    type: string
+                                  target:
+                                    properties:
+                                      averageUtilization:
+                                        format: int32
+                                        type: integer
+                                      averageValue:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                      type:
+                                        enum:
+                                          - Utilization
+                                          - Value
+                                          - AverageValue
+                                        type: string
+                                      value:
+                                        anyOf:
+                                          - type: integer
+                                          - type: string
+                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                        x-kubernetes-int-or-string: true
+                                    type: object
+                                required:
+                                  - name
+                                  - target
+                                type: object
+                              type:
+                                enum:
+                                  - Resource
+                                  - External
+                                  - PodMetric
+                                type: string
+                            required:
+                              - type
+                            type: object
+                          type: array
+                      type: object
                     automountServiceAccountToken:
                       type: boolean
                     batcher:
@@ -18478,6 +19342,8 @@ spec:
                                       - port
                                     type: object
                                 type: object
+                              stopSignal:
+                                type: string
                             type: object
                           livenessProbe:
                             properties:
@@ -19232,6 +20098,8 @@ spec:
                                       - port
                                     type: object
                                 type: object
+                              stopSignal:
+                                type: string
                             type: object
                           livenessProbe:
                             properties:
@@ -19684,6 +20552,10 @@ spec:
                       type: object
                     logger:
                       properties:
+                        metadataAnnotations:
+                          items:
+                            type: string
+                          type: array
                         metadataHeaders:
                           items:
                             type: string
@@ -19694,12 +20566,27 @@ spec:
                             - request
                             - response
                           type: string
+                        storage:
+                          properties:
+                            key:
+                              type: string
+                            parameters:
+                              additionalProperties:
+                                type: string
+                              type: object
+                            path:
+                              type: string
+                            serviceAccountName:
+                              type: string
+                          type: object
                         url:
                           type: string
                       type: object
                     maxReplicas:
+                      format: int32
                       type: integer
                     minReplicas:
+                      format: int32
                       type: integer
                     nodeName:
                       type: string
@@ -19753,6 +20640,39 @@ spec:
                       x-kubernetes-list-map-keys:
                         - name
                       x-kubernetes-list-type: map
+                    resources:
+                      properties:
+                        claims:
+                          items:
+                            properties:
+                              name:
+                                type: string
+                              request:
+                                type: string
+                            required:
+                              - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                            - name
+                          x-kubernetes-list-type: map
+                        limits:
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          type: object
+                        requests:
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          type: object
+                      type: object
                     restartPolicy:
                       type: string
                     runtimeClassName:
@@ -19764,7 +20684,14 @@ spec:
                         - concurrency
                         - rps
                       type: string
+                    scaleMetricType:
+                      enum:
+                        - Utilization
+                        - Value
+                        - AverageValue
+                      type: string
                     scaleTarget:
+                      format: int32
                       type: integer
                     schedulerName:
                       type: string
@@ -19804,6 +20731,8 @@ spec:
                         runAsUser:
                           format: int64
                           type: integer
+                        seLinuxChangePolicy:
+                          type: string
                         seLinuxOptions:
                           properties:
                             level:
@@ -20749,6 +21678,8 @@ spec:
                   additionalProperties:
                     type: string
                   type: object
+                clusterServingRuntimeName:
+                  type: string
                 components:
                   additionalProperties:
                     properties:
@@ -20895,6 +21826,8 @@ spec:
                 observedGeneration:
                   format: int64
                   type: integer
+                servingRuntimeName:
+                  type: string
                 url:
                   type: string
               type: object

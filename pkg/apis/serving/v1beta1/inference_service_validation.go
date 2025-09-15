@@ -21,19 +21,21 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"regexp"
-
-	"github.com/kserve/kserve/pkg/constants"
-	"github.com/kserve/kserve/pkg/utils"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	"knative.dev/serving/pkg/apis/autoscaling"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	"github.com/kserve/kserve/pkg/constants"
+	"github.com/kserve/kserve/pkg/utils"
 )
 
 // regular expressions for validation of isvc name
@@ -45,12 +47,13 @@ const (
 var (
 	// logger for the validation webhook.
 	validatorLogger = logf.Log.WithName("inferenceservice-v1beta1-validation-webhook")
-	// regular expressions for validation of isvc name
+	// IsvcRegexp regular expressions for validation of isvc name
 	IsvcRegexp = regexp.MustCompile("^" + IsvcNameFmt + "$")
 )
 
 // +kubebuilder:object:generate=false
 // +k8s:openapi-gen=false
+
 // InferenceServiceValidator is responsible for validating the InferenceService resource
 // when it is created, updated, or deleted.
 //
@@ -63,7 +66,7 @@ var _ webhook.CustomValidator = &InferenceServiceValidator{}
 
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type
 func (v *InferenceServiceValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	isvc, err := convertToInferenceService(obj)
+	isvc, err := utils.Convert[*InferenceService](obj)
 	if err != nil {
 		validatorLogger.Error(err, "Unable to convert object to InferenceService")
 		return nil, err
@@ -74,12 +77,12 @@ func (v *InferenceServiceValidator) ValidateCreate(ctx context.Context, obj runt
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
 func (v *InferenceServiceValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	isvc, err := convertToInferenceService(newObj)
+	isvc, err := utils.Convert[*InferenceService](newObj)
 	if err != nil {
 		validatorLogger.Error(err, "Unable to convert object to InferenceService")
 		return nil, err
 	}
-	oldIsvc, err := convertToInferenceService(oldObj)
+	oldIsvc, err := utils.Convert[*InferenceService](oldObj)
 	if err != nil {
 		validatorLogger.Error(err, "Unable to convert object to InferenceService")
 	}
@@ -93,19 +96,13 @@ func (v *InferenceServiceValidator) ValidateUpdate(ctx context.Context, oldObj, 
 
 // ValidateDelete implements webhook.Validator so a webhook will be registered for the type
 func (v *InferenceServiceValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	isvc, err := convertToInferenceService(obj)
+	isvc, err := utils.Convert[*InferenceService](obj)
 	if err != nil {
 		validatorLogger.Error(err, "Unable to convert object to InferenceService")
 		return nil, err
 	}
 	validatorLogger.Info("validate delete", "name", isvc.Name)
 	return nil, nil
-}
-
-// GetIntReference returns the pointer for the integer input
-func GetIntReference(number int) *int {
-	num := number
-	return &num
 }
 
 func validateInferenceService(isvc *InferenceService) (admission.Warnings, error) {
@@ -120,15 +117,15 @@ func validateInferenceService(isvc *InferenceService) (admission.Warnings, error
 		return allWarnings, err
 	}
 
-	if err := validateAutoscalerTargetUtilizationPercentage(isvc); err != nil {
-		return allWarnings, err
-	}
-
 	if err := validateMultiNodeVariables(isvc); err != nil {
 		return allWarnings, err
 	}
 
 	if err := validateCollocationStorageURI(isvc.Spec.Predictor); err != nil {
+		return allWarnings, err
+	}
+
+	if err := validatePredictor(isvc); err != nil {
 		return allWarnings, err
 	}
 
@@ -153,6 +150,40 @@ func validateInferenceService(isvc *InferenceService) (admission.Warnings, error
 	return allWarnings, nil
 }
 
+func validatePredictor(isvc *InferenceService) error {
+	predictor := isvc.Spec.Predictor
+
+	// log predictor
+	validatorLogger.Info("Incoming predictor struct", "predictor", predictor)
+
+	// in most of the case, standard predictors will all be packed into `predictor.model`, and decide the backend process through `modelFormat.name``
+	switch {
+	case predictor.SKLearn != nil && predictor.SKLearn.Name != "":
+		return errors.New("the 'name' field is not allowed in standard predictor")
+	case predictor.XGBoost != nil && predictor.XGBoost.Name != "":
+		return errors.New("the 'name' field is not allowed in standard predictor")
+	case predictor.Tensorflow != nil && predictor.Tensorflow.Name != "":
+		return errors.New("the 'name' field is not allowed in standard predictor")
+	case predictor.PyTorch != nil && predictor.PyTorch.Name != "":
+		return errors.New("the 'name' field is not allowed in standard predictor")
+	case predictor.Triton != nil && predictor.Triton.Name != "":
+		return errors.New("the 'name' field is not allowed in standard predictor")
+	case predictor.ONNX != nil && predictor.ONNX.Name != "":
+		return errors.New("the 'name' field is not allowed in standard predictor")
+	case predictor.HuggingFace != nil && predictor.HuggingFace.Name != "":
+		return errors.New("the 'name' field is not allowed in standard predictor")
+	case predictor.PMML != nil && predictor.PMML.Name != "":
+		return errors.New("the 'name' field is not allowed in standard predictor")
+	case predictor.LightGBM != nil && predictor.LightGBM.Name != "":
+		return errors.New("the 'name' field is not allowed in standard predictor")
+	case predictor.Paddle != nil && predictor.Paddle.Name != "":
+		return errors.New("the 'name' field is not allowed in standard predictor")
+	case predictor.Model != nil && predictor.Model.Name != "":
+		return errors.New("the 'name' field is not allowed in standard predictor")
+	}
+	return nil
+}
+
 // validateMultiNodeVariables validates when there is workerSpec set in isvc
 func validateMultiNodeVariables(isvc *InferenceService) error {
 	if isvc.Spec.Predictor.WorkerSpec != nil {
@@ -167,14 +198,11 @@ func validateMultiNodeVariables(isvc *InferenceService) error {
 				return fmt.Errorf(DisallowedWorkerSpecTensorParallelSizeEnvError, isvc.Name)
 			}
 
-			customGPUResourceTypes := isvc.GetAnnotations()[constants.CustomGPUResourceTypesAnnotationKey]
-			if customGPUResourceTypes != "" {
-				if !utils.IsValidCustomGPUArray(customGPUResourceTypes) {
-					return fmt.Errorf(InvalidCustomGPUTypesAnnotationFormatError, isvc.Name, constants.CustomGPUResourceTypesAnnotationKey)
-				}
+			hadUnknownGpuType, err := utils.HasUnknownGpuResourceType(isvc.Spec.Predictor.Model.Resources, isvc.Annotations)
+			if err != nil {
+				return err
 			}
-
-			if utils.IsUnknownGpuResourceType(isvc.Spec.Predictor.Model.Resources, customGPUResourceTypes) {
+			if hadUnknownGpuType {
 				return fmt.Errorf(InvalidUnknownGPUTypeError, isvc.Name)
 			}
 
@@ -182,28 +210,32 @@ func validateMultiNodeVariables(isvc *InferenceService) error {
 				return fmt.Errorf(MissingStorageURI, isvc.Name)
 			} else {
 				storageProtocol := strings.Split(*isvc.Spec.Predictor.Model.StorageURI, "://")[0]
-				if storageProtocol != "pvc" {
+				if storageProtocol != "pvc" && storageProtocol != "oci" {
 					return fmt.Errorf(InvalidNotSupportedStorageURIProtocolError, isvc.Name, storageProtocol)
 				}
 			}
-			if isvc.GetAnnotations()[constants.AutoscalerClass] != string(constants.AutoscalerClassExternal) {
+			if isvc.GetAnnotations()[constants.AutoscalerClass] != string(constants.AutoscalerClassNone) {
 				return fmt.Errorf(InvalidAutoScalerError, isvc.Name, isvc.GetAnnotations()[constants.AutoscalerClass])
 			}
 		}
 
-		// WorkerSpec.PipelineParallelSize should not be less than 2 (head + worker)
-		if pps := isvc.Spec.Predictor.WorkerSpec.PipelineParallelSize; pps != nil && *pps < 2 {
+		// WorkerSpec.PipelineParallelSize should not be less than 1
+		if pps := isvc.Spec.Predictor.WorkerSpec.PipelineParallelSize; pps != nil && *pps < constants.DefaultPipelineParallelSize {
 			return fmt.Errorf(InvalidWorkerSpecPipelineParallelSizeValueError, isvc.Name, strconv.Itoa(*pps))
 		}
 
 		// WorkerSpec.TensorParallelSize should not be less than 1.
-		if tps := isvc.Spec.Predictor.WorkerSpec.TensorParallelSize; tps != nil && *tps < 1 {
+		if tps := isvc.Spec.Predictor.WorkerSpec.TensorParallelSize; tps != nil && *tps < constants.DefaultTensorParallelSize {
 			return fmt.Errorf(InvalidWorkerSpecTensorParallelSizeValueError, isvc.Name, strconv.Itoa(*tps))
 		}
 
 		if isvc.Spec.Predictor.WorkerSpec.Containers != nil {
 			for _, container := range isvc.Spec.Predictor.WorkerSpec.Containers {
-				if utils.IsUnknownGpuResourceType(container.Resources, isvc.GetAnnotations()[constants.CustomGPUResourceTypesAnnotationKey]) {
+				hadUnknownGpuType, err := utils.HasUnknownGpuResourceType(container.Resources, isvc.Annotations)
+				if err != nil {
+					return err
+				}
+				if hadUnknownGpuType {
 					return fmt.Errorf(InvalidUnknownGPUTypeError, isvc.Name)
 				}
 			}
@@ -216,11 +248,23 @@ func validateMultiNodeVariables(isvc *InferenceService) error {
 func validateAutoScalingCompExtension(annotations map[string]string, compExtSpec *ComponentExtensionSpec) error {
 	deploymentMode := annotations["serving.kserve.io/deploymentMode"]
 	annotationClass := annotations[autoscaling.ClassAnnotationKey]
-	if deploymentMode == string(constants.RawDeployment) || annotationClass == string(autoscaling.HPA) {
-		return validateScalingHPACompExtension(compExtSpec)
-	}
+	autoscalerClass := annotations[constants.AutoscalerClass]
 
-	return validateScalingKPACompExtension(compExtSpec)
+	switch deploymentMode {
+	case string(constants.RawDeployment):
+		switch autoscalerClass {
+		case string(constants.AutoscalerClassHPA):
+			return validateScalingHPACompExtension(compExtSpec)
+		case string(constants.AutoscalerClassKeda):
+			return validateScalingKedaCompExtension(compExtSpec)
+		}
+	default:
+		if annotationClass == autoscaling.HPA {
+			return validateScalingHPACompExtension(compExtSpec)
+		}
+		return validateScalingKPACompExtension(compExtSpec)
+	}
+	return nil
 }
 
 // Validation of isvc name
@@ -239,18 +283,7 @@ func validateInferenceServiceAutoscaler(isvc *InferenceService) error {
 	if ok {
 		for _, item := range constants.AutoscalerAllowedClassList {
 			if class == item {
-				switch class {
-				case constants.AutoscalerClassHPA:
-					if metric, ok := annotations[constants.AutoscalerMetrics]; ok {
-						return validateHPAMetrics(ScaleMetric(metric))
-					} else {
-						return nil
-					}
-				case constants.AutoscalerClassExternal:
-					return nil
-				default:
-					return fmt.Errorf("unknown autoscaler class [%s]", class)
-				}
+				return nil
 			}
 		}
 		return fmt.Errorf("[%s] is not a supported autoscaler class type", value)
@@ -259,28 +292,37 @@ func validateInferenceServiceAutoscaler(isvc *InferenceService) error {
 	return nil
 }
 
-// Validate of autoscaler HPA metrics
+// Validation for allowed HPA metrics
 func validateHPAMetrics(metric ScaleMetric) error {
-	for _, item := range constants.AutoscalerAllowedMetricsList {
-		if item == constants.AutoscalerMetricsType(metric) {
-			return nil
-		}
+	if slices.Contains(constants.AutoscalerAllowedHPAMetricsList, constants.AutoscalerHPAMetricsType(metric)) {
+		return nil
 	}
 	return fmt.Errorf("[%s] is not a supported metric", metric)
 }
 
-// Validate of autoscaler targetUtilizationPercentage
-func validateAutoscalerTargetUtilizationPercentage(isvc *InferenceService) error {
-	annotations := isvc.ObjectMeta.Annotations
-	if value, ok := annotations[constants.TargetUtilizationPercentage]; ok {
-		t, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("the target utilization percentage should be a [1-100] integer")
-		} else if t < 1 || t > 100 {
-			return fmt.Errorf("the target utilization percentage should be a [1-100] integer")
+func validateTargetUtilization(targetValue int32) error {
+	if targetValue < 1 || targetValue > 100 {
+		return errors.New("the target utilization percentage should be a [1-100] integer")
+	}
+	return nil
+}
+
+func validateScaleTarget(target MetricTarget) error {
+	switch target.Type {
+	case UtilizationMetricType:
+		if target.AverageUtilization == nil {
+			return errors.New("the AverageUtilization type should be set")
+		}
+		return validateTargetUtilization(*target.AverageUtilization)
+	case AverageValueMetricType:
+		if target.AverageValue == nil {
+			return errors.New("the AverageValue type should be set")
+		}
+	case ValueMetricType:
+		if target.Value == nil {
+			return errors.New("the Value type should be set")
 		}
 	}
-
 	return nil
 }
 
@@ -291,7 +333,6 @@ func validateScalingHPACompExtension(compExtSpec *ComponentExtensionSpec) error 
 	}
 
 	err := validateHPAMetrics(metric)
-
 	if err != nil {
 		return err
 	}
@@ -299,19 +340,100 @@ func validateScalingHPACompExtension(compExtSpec *ComponentExtensionSpec) error 
 	if compExtSpec.ScaleTarget != nil {
 		target := *compExtSpec.ScaleTarget
 		if metric == MetricCPU && target < 1 || target > 100 {
-			return fmt.Errorf("the target utilization percentage should be a [1-100] integer")
+			return errors.New("the target utilization percentage should be a [1-100] integer")
 		}
 
 		if metric == MetricMemory && target < 1 {
-			return fmt.Errorf("the target memory should be greater than 1 MiB")
+			return errors.New("the target memory should be greater than 1 MiB")
+		}
+	}
+
+	if compExtSpec.AutoScaling != nil {
+		for _, metricSpec := range compExtSpec.AutoScaling.Metrics {
+			metricType := metricSpec.Type
+			switch metricType {
+			case ResourceMetricSourceType:
+				if metricSpec.Resource == nil {
+					return errors.New("metricSpec.Resource is not set for resource metric source type")
+				}
+			default:
+				return fmt.Errorf("invalid HPA metric source type with value [%s],"+
+					"valid metric source types are Resource", metricType)
+			}
 		}
 	}
 
 	return nil
 }
 
+func validateScalingKedaCompExtension(compExtSpec *ComponentExtensionSpec) error {
+	if compExtSpec.ScaleMetric != nil {
+		return errors.New("ScaleMetric is not supported for KEDA")
+	}
+
+	if compExtSpec.AutoScaling != nil {
+		for _, metric := range compExtSpec.AutoScaling.Metrics {
+			metricType := metric.Type
+			switch metricType {
+			case ResourceMetricSourceType:
+				if metric.Resource == nil {
+					return errors.New("metricSpec.Resource is not set for resource metric source type")
+				}
+				switch metric.Resource.Name {
+				case ResourceMetricCPU:
+					if metric.Resource.Target.Type != UtilizationMetricType {
+						return errors.New("the cpu target value type should be Utilization")
+					}
+				case ResourceMetricMemory:
+					if metric.Resource.Target.Type != AverageValueMetricType && metric.Resource.Target.Type != UtilizationMetricType {
+						return errors.New("the memory target value type should be AverageValue or Utilization")
+					}
+					if metric.Resource.Target.Type == AverageValueMetricType && metric.Resource.Target.AverageValue.Cmp(resource.MustParse("1Mi")) < 0 {
+						return errors.New("the memory target value should be greater than 1 MiB")
+					}
+				default:
+					return fmt.Errorf("resource type %s is not supported", metric.Resource.Name)
+				}
+				if err := validateScaleTarget(metric.Resource.Target); err != nil {
+					return err
+				}
+			case ExternalMetricSourceType:
+				if metric.External == nil {
+					return errors.New("metricSpec.External is not set for external metric source type")
+				}
+				if metric.External.Metric.Query == "" {
+					return errors.New("the query should not be empty")
+				}
+				if metric.External.Target.Value == nil {
+					return errors.New("the target threshold value should not be empty")
+				}
+				if err := validateScaleTarget(metric.External.Target); err != nil {
+					return err
+				}
+			case PodMetricSourceType:
+				if metric.PodMetric == nil {
+					return errors.New("metricSpec.PodMetric is not set for pod metric source type")
+				}
+				if metric.PodMetric.Metric.Query == "" {
+					return errors.New("the query should not be empty")
+				}
+				if metric.PodMetric.Target.Value == nil {
+					return errors.New("the target threshold value should not be empty")
+				}
+				if err := validateScaleTarget(metric.PodMetric.Target); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("unknown KEDA metric type with value [%s]."+
+					"Valid types are Resource,External,PodMetric", metricType)
+			}
+		}
+	}
+	return nil
+}
+
 func validateKPAMetrics(metric ScaleMetric) error {
-	for _, item := range constants.AutoScalerKPAMetricsAllowedList {
+	for _, item := range constants.AutoscalerAllowedKPAMetricsList {
 		if item == constants.AutoScalerKPAMetricsType(metric) {
 			return nil
 		}
@@ -321,7 +443,7 @@ func validateKPAMetrics(metric ScaleMetric) error {
 
 func validateScalingKPACompExtension(compExtSpec *ComponentExtensionSpec) error {
 	if compExtSpec.DeploymentStrategy != nil {
-		return fmt.Errorf("customizing deploymentStrategy is only supported for raw deployment mode")
+		return errors.New("customizing deploymentStrategy is only supported for raw deployment mode")
 	}
 	metric := MetricConcurrency
 	if compExtSpec.ScaleMetric != nil {
@@ -329,7 +451,6 @@ func validateScalingKPACompExtension(compExtSpec *ComponentExtensionSpec) error 
 	}
 
 	err := validateKPAMetrics(metric)
-
 	if err != nil {
 		return err
 	}
@@ -338,7 +459,7 @@ func validateScalingKPACompExtension(compExtSpec *ComponentExtensionSpec) error 
 		target := *compExtSpec.ScaleTarget
 
 		if metric == MetricRPS && target < 1 {
-			return fmt.Errorf("the target for rps should be greater than 1")
+			return errors.New("the target for rps should be greater than 1")
 		}
 	}
 
@@ -371,13 +492,4 @@ func validateDeploymentMode(newIsvc *InferenceService, oldIsvc *InferenceService
 		}
 	}
 	return nil
-}
-
-// Convert runtime.Object into InferenceService
-func convertToInferenceService(obj runtime.Object) (*InferenceService, error) {
-	isvc, ok := obj.(*InferenceService)
-	if !ok {
-		return nil, fmt.Errorf("expected an InferenceService object but got %T", obj)
-	}
-	return isvc, nil
 }

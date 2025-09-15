@@ -15,6 +15,7 @@
 from __future__ import absolute_import
 
 from .model import Model
+from .predictor_config import PredictorConfig
 from .model_server import ModelServer
 from .inference_client import InferenceGRPCClient, InferenceRESTClient, RESTConfig
 from .protocol.infer_type import InferRequest, InferInput, InferResponse, InferOutput
@@ -49,6 +50,14 @@ from .models.v1alpha1_inference_graph_status import V1alpha1InferenceGraphStatus
 from .models.v1alpha1_inference_router import V1alpha1InferenceRouter
 from .models.v1alpha1_inference_step import V1alpha1InferenceStep
 from .models.v1alpha1_inference_target import V1alpha1InferenceTarget
+from .models.v1alpha1_llm_inference_service import V1alpha1LLMInferenceService
+from .models.v1alpha1_llm_inference_service_config import (
+    V1alpha1LLMInferenceServiceConfig,
+)
+from .models.v1alpha1_llm_inference_service_config_list import (
+    V1alpha1LLMInferenceServiceConfigList,
+)
+from .models.v1alpha1_llm_inference_service_list import V1alpha1LLMInferenceServiceList
 from .models.v1alpha1_model_spec import V1alpha1ModelSpec
 from .models.v1alpha1_serving_runtime import V1alpha1ServingRuntime
 from .models.v1alpha1_serving_runtime_list import V1alpha1ServingRuntimeList
@@ -106,3 +115,13 @@ from .models.v1beta1_transformers_config import V1beta1TransformersConfig
 from .models.v1beta1_triton_spec import V1beta1TritonSpec
 from .models.v1beta1_xg_boost_spec import V1beta1XGBoostSpec
 from .models.v1beta1_storage_spec import V1beta1StorageSpec
+from .models.v1beta1_auto_scaling_spec import V1beta1AutoScalingSpec
+from .models.v1beta1_external_metric_source import V1beta1ExternalMetricSource
+from .models.v1beta1_external_metrics import V1beta1ExternalMetrics
+from .models.v1beta1_resource_metric_source import V1beta1ResourceMetricSource
+from .models.v1beta1_metric_target import V1beta1MetricTarget
+from .models.v1beta1_metrics_spec import V1beta1MetricsSpec
+from .models.v1beta1_pod_metric_source import V1beta1PodMetricSource
+from .models.v1beta1_pod_metrics import V1beta1PodMetrics
+from .models.v1beta1_ext_metric_authentication import V1beta1ExtMetricAuthentication
+from .models.v1beta1_authentication_ref import V1beta1AuthenticationRef

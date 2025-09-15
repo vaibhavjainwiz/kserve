@@ -47,7 +47,9 @@ import (
 
 	"github.com/kserve/kserve/pkg/apis/serving/v1beta1"
 	"github.com/kserve/kserve/pkg/constants"
+
 	v1beta1utils "github.com/kserve/kserve/pkg/controller/v1beta1/inferenceservice/utils"
+
 	"github.com/kserve/kserve/pkg/utils"
 )
 
@@ -66,18 +68,21 @@ const (
 	oauthProxy    = "oauthProxy"
 )
 
-func NewDeploymentReconciler(client kclient.Client,
+func NewDeploymentReconciler(ctx context.Context,
+	client kclient.Client,
 	clientset kubernetes.Interface,
 	scheme *runtime.Scheme,
 	resourceType constants.ResourceType,
 	componentMeta metav1.ObjectMeta,
 	workerComponentMeta metav1.ObjectMeta,
 	componentExt *v1beta1.ComponentExtensionSpec,
-	podSpec *corev1.PodSpec, workerPodSpec *corev1.PodSpec) (*DeploymentReconciler, error) {
-	deploymentList, err := createRawDeploymentODH(clientset, resourceType, componentMeta, workerComponentMeta, componentExt, podSpec, workerPodSpec)
+	podSpec *corev1.PodSpec, workerPodSpec *corev1.PodSpec,
+) (*DeploymentReconciler, error) {
+	deploymentList, err := createRawDeploymentODH(ctx, clientset, resourceType, componentMeta, workerComponentMeta, componentExt, podSpec, workerPodSpec)
 	if err != nil {
 		return nil, err
 	}
+
 	return &DeploymentReconciler{
 		client:         client,
 		scheme:         scheme,
@@ -86,13 +91,19 @@ func NewDeploymentReconciler(client kclient.Client,
 	}, nil
 }
 
-func createRawDeploymentODH(clientset kubernetes.Interface, resourceType constants.ResourceType, componentMeta metav1.ObjectMeta, workerComponentMeta metav1.ObjectMeta,
+func createRawDeploymentODH(ctx context.Context,
+	clientset kubernetes.Interface,
+	resourceType constants.ResourceType,
+	componentMeta metav1.ObjectMeta,
+	workerComponentMeta metav1.ObjectMeta,
 	componentExt *v1beta1.ComponentExtensionSpec,
-	podSpec *corev1.PodSpec, workerPodSpec *corev1.PodSpec) ([]*appsv1.Deployment, error) {
+	podSpec *corev1.PodSpec, workerPodSpec *corev1.PodSpec,
+) ([]*appsv1.Deployment, error) {
 	deploymentList, err := createRawDeployment(componentMeta, workerComponentMeta, componentExt, podSpec, workerPodSpec)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create raw deployment: %w", err)
 	}
+
 	enableAuth := false
 	// Deployment list is for multi-node, we only need to add oauth proxy and serving sercret certs to the head deployment
 	headDeployment := deploymentList[0]
@@ -100,7 +111,7 @@ func createRawDeploymentODH(clientset kubernetes.Interface, resourceType constan
 		enableAuth = true
 
 		if resourceType != constants.InferenceGraphResource { // InferenceGraphs don't use oauth-proxy
-			err := addOauthContainerToDeployment(clientset, headDeployment, componentMeta, componentExt, podSpec)
+			err := addOauthContainerToDeployment(ctx, clientset, headDeployment, componentMeta, componentExt, podSpec)
 			if err != nil {
 				return nil, err
 			}
@@ -114,68 +125,71 @@ func createRawDeploymentODH(clientset kubernetes.Interface, resourceType constan
 
 func createRawDeployment(componentMeta metav1.ObjectMeta, workerComponentMeta metav1.ObjectMeta,
 	componentExt *v1beta1.ComponentExtensionSpec,
-	podSpec *corev1.PodSpec, workerPodSpec *corev1.PodSpec) ([]*appsv1.Deployment, error) {
+	podSpec *corev1.PodSpec, workerPodSpec *corev1.PodSpec,
+) ([]*appsv1.Deployment, error) {
 	var deploymentList []*appsv1.Deployment
 	var workerNodeReplicas int32
-	var tensorParallelSize string
+	var headNodeGpuCount string
+	var workerNodeGpuCount string
 	multiNodeEnabled := false
 
+	defaultDeployment := createRawDefaultDeployment(componentMeta, componentExt, podSpec)
 	if workerPodSpec != nil {
 		multiNodeEnabled = true
 
+		// Use the "RAY_NODE_COUNT" environment variable to define the number of worker node replicas.
+		// Set the head node GPU count using the requestGPUCount environment variable in the head container
 		for _, container := range podSpec.Containers {
 			if container.Name == constants.InferenceServiceContainerName {
-				if value, exists := utils.GetEnvVarValue(container.Env, constants.PipelineParallelSizeEnvName); exists {
-					if parsedValue, err := strconv.Atoi(value); err == nil {
-						// Set pipelineParallelSize to workerNodeSize + 1 (head)
-						workerNodeReplicas = int32(parsedValue - 1) // nolint  #nosec G109
-					} else {
-						log.Error(err, "Failed to convert pipelineParallelSize to int")
+				if value, exists := utils.GetEnvVarValue(container.Env, constants.RayNodeCountEnvName); exists {
+					rayNodeCountFromEnv, err := utils.StringToInt32(value)
+					if err != nil {
+						log.Error(err, "Failed to convert rayNodeCount to int. Use default")
 					}
-				} else {
-					log.Info(fmt.Sprintf("PIPELINE_PARALLEL_SIZE is not set in the container's environment(%s)", constants.InferenceServiceContainerName))
+					workerNodeReplicas = rayNodeCountFromEnv - 1
+				}
+				if value, exists := utils.GetEnvVarValue(container.Env, constants.RequestGPUCountEnvName); exists {
+					headNodeGpuCount = value
 				}
 				break
 			}
 		}
-	}
 
-	defaultDeployment, err := createRawDefaultDeployment(componentMeta, componentExt, podSpec)
-	if err != nil {
-		return nil, err
-	}
-	if multiNodeEnabled {
-		// Use defaut value(1) if tensor-parallel-size is not set (gpu count)
-		tensorParallelSize = constants.DefaultTensorParallelSize
-
-		for _, container := range podSpec.Containers {
-			if container.Name == constants.InferenceServiceContainerName {
-				if value, exists := utils.GetEnvVarValue(container.Env, constants.TensorParallelSizeEnvName); exists {
-					// Use the environment variable value
-					tensorParallelSize = value
+		// Set the worker node GPU count using the requestGPUCount environment variable in the worker container
+		for _, container := range workerPodSpec.Containers {
+			if container.Name == constants.WorkerContainerName {
+				if value, exists := utils.GetEnvVarValue(container.Env, constants.RequestGPUCountEnvName); exists {
+					workerNodeGpuCount = value
 				}
 				break
 			}
 		}
+
 		// Update GPU resource of default podSpec
-		addGPUResourceToDeployment(defaultDeployment, constants.InferenceServiceContainerName, tensorParallelSize)
+		if err := addGPUResourceToDeployment(defaultDeployment, constants.InferenceServiceContainerName, headNodeGpuCount); err != nil {
+			return nil, err
+		}
 	}
 	deploymentList = append(deploymentList, defaultDeployment)
 
-	// Adds workerNode deployment
+	// workerNode deployment
 	if multiNodeEnabled {
 		workerDeployment := createRawWorkerDeployment(workerComponentMeta, componentExt, workerPodSpec, componentMeta.Name, workerNodeReplicas)
 
 		// Update GPU resource of workerPodSpec
-		addGPUResourceToDeployment(workerDeployment, constants.WorkerContainerName, tensorParallelSize)
+		if err := addGPUResourceToDeployment(workerDeployment, constants.WorkerContainerName, workerNodeGpuCount); err != nil {
+			return nil, err
+		}
 		deploymentList = append(deploymentList, workerDeployment)
 	}
+
 	return deploymentList, nil
 }
 
 func createRawDefaultDeployment(componentMeta metav1.ObjectMeta,
 	componentExt *v1beta1.ComponentExtensionSpec,
-	podSpec *corev1.PodSpec) (*appsv1.Deployment, error) {
+	podSpec *corev1.PodSpec,
+) *appsv1.Deployment {
 	podMetadata := componentMeta
 	podMetadata.Labels["app"] = constants.GetRawServiceLabel(componentMeta.Name)
 	setDefaultPodSpec(podSpec)
@@ -198,11 +212,11 @@ func createRawDefaultDeployment(componentMeta metav1.ObjectMeta,
 		deployment.Spec.Strategy = *componentExt.DeploymentStrategy
 	}
 	setDefaultDeploymentSpec(&deployment.Spec)
-	if componentExt.MinReplicas != nil && deployment.Annotations[constants.AutoscalerClass] == string(constants.AutoscalerClassExternal) {
-		deployment.Spec.Replicas = ptr.To(int32(*componentExt.MinReplicas))
+	if componentExt.MinReplicas != nil && deployment.Annotations[constants.AutoscalerClass] == string(constants.AutoscalerClassNone) {
+		deployment.Spec.Replicas = ptr.To(*componentExt.MinReplicas)
 	}
 
-	return deployment, nil
+	return deployment
 }
 
 func mountServingSecretVolumeToDeployment(deployment *appsv1.Deployment, componentMeta metav1.ObjectMeta, resourceType constants.ResourceType) {
@@ -235,8 +249,13 @@ func mountServingSecretVolumeToDeployment(deployment *appsv1.Deployment, compone
 	deployment.Spec.Template.Spec = *updatedPodSpec
 }
 
-func addOauthContainerToDeployment(clientset kubernetes.Interface, deployment *appsv1.Deployment, componentMeta metav1.ObjectMeta, componentExt *v1beta1.ComponentExtensionSpec,
-	podSpec *corev1.PodSpec) error {
+func addOauthContainerToDeployment(ctx context.Context,
+	clientset kubernetes.Interface,
+	deployment *appsv1.Deployment,
+	componentMeta metav1.ObjectMeta,
+	componentExt *v1beta1.ComponentExtensionSpec,
+	podSpec *corev1.PodSpec,
+) error {
 	var isvcname string
 	var upstreamPort string
 	var sa string
@@ -262,7 +281,7 @@ func addOauthContainerToDeployment(clientset kubernetes.Interface, deployment *a
 		} else {
 			sa = podSpec.ServiceAccountName
 		}
-		oauthProxyContainer, err := generateOauthProxyContainer(clientset, isvcname, componentMeta.Namespace, upstreamPort, sa)
+		oauthProxyContainer, err := generateOauthProxyContainer(ctx, clientset, isvcname, componentMeta.Namespace, upstreamPort, sa)
 		if err != nil {
 			// return the deployment without the oauth proxy container if there was an error
 			// This is required for the deployment_reconciler_tests
@@ -280,7 +299,8 @@ func addOauthContainerToDeployment(clientset kubernetes.Interface, deployment *a
 
 func createRawWorkerDeployment(componentMeta metav1.ObjectMeta,
 	componentExt *v1beta1.ComponentExtensionSpec,
-	podSpec *corev1.PodSpec, predictorName string, replicas int32) *appsv1.Deployment {
+	podSpec *corev1.PodSpec, predictorName string, replicas int32,
+) *appsv1.Deployment {
 	podMetadata := componentMeta
 	workerPredictorName := constants.GetRawWorkerServiceLabel(predictorName)
 	podMetadata.Labels["app"] = workerPredictorName
@@ -335,8 +355,8 @@ func GetKServeContainerPort(podSpec *corev1.PodSpec) string {
 	return kserveContainerPort
 }
 
-func generateOauthProxyContainer(clientset kubernetes.Interface, isvc string, namespace string, upstreamPort string, sa string) (*corev1.Container, error) {
-	isvcConfigMap, err := clientset.CoreV1().ConfigMaps(constants.KServeNamespace).Get(context.TODO(), constants.InferenceServiceConfigMapName, metav1.GetOptions{})
+func generateOauthProxyContainer(ctx context.Context, clientset kubernetes.Interface, isvc string, namespace string, upstreamPort string, sa string) (*corev1.Container, error) {
+	isvcConfigMap, err := clientset.CoreV1().ConfigMaps(constants.KServeNamespace).Get(ctx, constants.InferenceServiceConfigMapName, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -347,7 +367,7 @@ func generateOauthProxyContainer(clientset kubernetes.Interface, isvc string, na
 	}
 	if oauthProxyConfig.Image == "" || oauthProxyConfig.MemoryRequest == "" || oauthProxyConfig.MemoryLimit == "" ||
 		oauthProxyConfig.CpuRequest == "" || oauthProxyConfig.CpuLimit == "" {
-		return nil, fmt.Errorf("one or more oauthProxyConfig fields are empty")
+		return nil, errors.New("one or more oauthProxyConfig fields are empty")
 	}
 	oauthImage := oauthProxyConfig.Image
 	oauthMemoryRequest := oauthProxyConfig.MemoryRequest
@@ -438,32 +458,47 @@ func generateCookieSecret() (string, error) {
 }
 
 // checkDeploymentExist checks if the deployment exists?
-func (r *DeploymentReconciler) checkDeploymentExist(client kclient.Client, deployment *appsv1.Deployment) (constants.CheckResultType, *appsv1.Deployment, error) {
+func (r *DeploymentReconciler) checkDeploymentExist(ctx context.Context, client kclient.Client, deployment *appsv1.Deployment) (constants.CheckResultType, *appsv1.Deployment, error) {
+	forceStopRuntime := utils.GetForceStopRuntime(deployment)
+
 	// get deployment
 	existingDeployment := &appsv1.Deployment{}
-	err := client.Get(context.TODO(), types.NamespacedName{
+	err := client.Get(ctx, types.NamespacedName{
 		Namespace: deployment.ObjectMeta.Namespace,
 		Name:      deployment.ObjectMeta.Name,
 	}, existingDeployment)
 	if err != nil {
 		if apierr.IsNotFound(err) {
-			return constants.CheckResultCreate, nil, nil
+			if !forceStopRuntime {
+				return constants.CheckResultCreate, nil, nil
+			}
+			return constants.CheckResultSkipped, nil, nil
 		}
 		return constants.CheckResultUnknown, nil, err
 	}
+
+	// existed, but marked for deletion
+	if forceStopRuntime {
+		ctrl := metav1.GetControllerOf(deployment)
+		existingCtrl := metav1.GetControllerOf(existingDeployment)
+		if ctrl != nil && existingCtrl != nil && ctrl.UID == existingCtrl.UID {
+			return constants.CheckResultDelete, existingDeployment, nil
+		}
+	}
+
 	// existed, check equivalence
 	// for HPA scaling, we should ignore Replicas of Deployment
-	// for external scaler, we should not ignore Replicas.
+	// for none scaler, we should not ignore Replicas.
 	var ignoreFields cmp.Option = nil // Initialize to nil by default
 
 	// Set ignoreFields if the condition is met
-	if existingDeployment.Annotations[constants.AutoscalerClass] != string(constants.AutoscalerClassExternal) {
+	if existingDeployment.Annotations[constants.AutoscalerClass] != string(constants.AutoscalerClassNone) {
 		ignoreFields = cmpopts.IgnoreFields(appsv1.DeploymentSpec{}, "Replicas")
 	}
 
 	// Do a dry-run update. This will populate our local deployment object with any default values
 	// that are present on the remote version.
-	if err := client.Update(context.TODO(), deployment, kclient.DryRunAll); err != nil {
+	if err := client.Update(ctx, deployment, kclient.DryRunAll); err != nil {
 		log.Error(err, "Failed to perform dry-run update of deployment", "Deployment", deployment.Name)
 		return constants.CheckResultUnknown, nil, err
 	}
@@ -475,7 +510,7 @@ func (r *DeploymentReconciler) checkDeploymentExist(client kclient.Client, deplo
 		return constants.CheckResultUnknown, nil, err
 	} else if len(diff) > 0 {
 		log.Info("Deployment Updated", "Diff", diff)
-		return constants.CheckResultUpdate, processedNewDep, nil
+		return constants.CheckResultUpdate, existingDeployment, nil
 	}
 	return constants.CheckResultExisted, existingDeployment, nil
 }
@@ -565,17 +600,30 @@ func setDefaultDeploymentSpec(spec *appsv1.DeploymentSpec) {
 	}
 }
 
-func addGPUResourceToDeployment(deployment *appsv1.Deployment, targetContainerName string, tensorParallelSize string) {
+// addGPUResourceToDeployment assigns GPU resources to a specific container in a Deployment.
+//
+// Parameters:
+// - deployment: Pointer to the Deployment where GPU resources should be added.
+// - targetContainerName: Name of the container within the Deployment to which the GPU resources should be assigned.
+// - gpuCount: String representation of the number of GPUs to allocate.
+//
+// Functionality:
+// - Retrieves the list of GPU resource types, updating it based on annotations if available.
+// - Identifies the correct GPU resource type by checking existing Limits and Requests values in the container.
+// - If no GPU resource is explicitly set, it defaults to "nvidia.com/gpu".
+// - Ensures that the container's Limits and Requests maps are initialized before assigning values.
+// - Sets both the Limits and Requests for the selected GPU resource type using the provided gpuCount.
+func addGPUResourceToDeployment(deployment *appsv1.Deployment, targetContainerName string, gpuCount string) error {
 	// Default GPU type is "nvidia.com/gpu"
 	gpuResourceType := corev1.ResourceName(constants.NvidiaGPUResourceType)
-	// If CustomGPUResourceTypeAnnotationKey is set, the specified custom GPU resource will be added to the available GPUResourceTypeList.
-	customGPUResourceTypes := deployment.GetAnnotations()[constants.CustomGPUResourceTypesAnnotationKey]
-	if customGPUResourceTypes != "" {
-		constants.GPUResourceTypeList = append(constants.GPUResourceTypeList, strings.Split(customGPUResourceTypes, ",")...)
+	updatedGPUResourceTypeList, err := utils.UpdateGPUResourceTypeListByAnnotation(deployment.Spec.Template.Annotations)
+	if err != nil {
+		return err
 	}
+
 	for i, container := range deployment.Spec.Template.Spec.Containers {
 		if container.Name == targetContainerName {
-			for _, gpuType := range constants.GPUResourceTypeList {
+			for _, gpuType := range updatedGPUResourceTypeList {
 				resourceName := corev1.ResourceName(gpuType)
 				if qty, exists := deployment.Spec.Template.Spec.Containers[i].Resources.Limits[resourceName]; exists && !qty.IsZero() {
 					gpuResourceType = resourceName
@@ -592,27 +640,27 @@ func addGPUResourceToDeployment(deployment *appsv1.Deployment, targetContainerNa
 				deployment.Spec.Template.Spec.Containers[i].Resources.Limits = make(map[corev1.ResourceName]resource.Quantity)
 			}
 
-			// Assign the tensorParallelSize value to the GPU resource limits
-			deployment.Spec.Template.Spec.Containers[i].Resources.Limits[gpuResourceType] = resource.MustParse(tensorParallelSize)
+			// Assign the gpuCount value to the GPU resource limits
+			deployment.Spec.Template.Spec.Containers[i].Resources.Limits[gpuResourceType] = resource.MustParse(gpuCount)
 
 			// Initialize Requests map if it's nil
 			if container.Resources.Requests == nil {
 				deployment.Spec.Template.Spec.Containers[i].Resources.Requests = make(map[corev1.ResourceName]resource.Quantity)
 			}
 
-			// Assign the tensorParallelSize value to the GPU resource requests
-			deployment.Spec.Template.Spec.Containers[i].Resources.Requests[gpuResourceType] = resource.MustParse(tensorParallelSize)
+			// Assign the gpuCount value to the GPU resource requests
+			deployment.Spec.Template.Spec.Containers[i].Resources.Requests[gpuResourceType] = resource.MustParse(gpuCount)
 			break
 		}
 	}
+	return nil
 }
 
 // Reconcile ...
-func (r *DeploymentReconciler) Reconcile() ([]*appsv1.Deployment, error) {
-	for _, deployment := range r.DeploymentList {
+func (r *DeploymentReconciler) Reconcile(ctx context.Context) ([]*appsv1.Deployment, error) {
+	for _, desiredDep := range r.DeploymentList {
 		// Reconcile Deployment
-		originalDeployment := &appsv1.Deployment{}
-		checkResult, _, err := r.checkDeploymentExist(r.client, deployment)
+		checkResult, existingDep, err := r.checkDeploymentExist(ctx, r.client, desiredDep)
 		if err != nil {
 			return nil, err
 		}
@@ -621,131 +669,43 @@ func (r *DeploymentReconciler) Reconcile() ([]*appsv1.Deployment, error) {
 		var opErr error
 		switch checkResult {
 		case constants.CheckResultCreate:
-			opErr = r.client.Create(context.TODO(), deployment)
+			opErr = r.client.Create(ctx, desiredDep)
 		case constants.CheckResultUpdate:
-			// get the current deployment
-			_ = r.client.Get(context.TODO(), types.NamespacedName{Name: deployment.Name, Namespace: deployment.Namespace}, originalDeployment)
-			// we need to remove the Replicas field from the deployment spec
+			curDeployment := existingDep.DeepCopy()
+			modDeployment := desiredDep.DeepCopy()
 
-			// Check if there are any envs to remove
-			// If there, its value will be set to "delete" so we can update the patchBytes with
-			// "patch": "delete"
-			// The strategic merge patch does not remove items from list just by removing it from the patch,
-			// to delete lists items using strategic merge patch, the $patch delete pattern is used.
-			// Example:
-			// - env:
-			//   - "name": "ENV1",
-			//     "$patch": "delete"
-			for i, deploymentC := range deployment.Spec.Template.Spec.Containers {
-				envs := []corev1.EnvVar{}
-				for _, OriginalC := range originalDeployment.Spec.Template.Spec.Containers {
-					if deploymentC.Name == OriginalC.Name {
-						envsToRemove, envsToKeep := utils.CheckEnvsToRemove(deploymentC.Env, OriginalC.Env)
-						if len(envsToRemove) > 0 {
-							envs = append(envs, envsToKeep...)
-							envs = append(envs, envsToRemove...)
-						} else {
-							envs = deploymentC.Env
-						}
-					}
-				}
-				deployment.Spec.Template.Spec.Containers[i].Env = envs
+			// To avoid the conflict between HPA and Deployment,
+			// we need to remove the Replicas field from the deployment spec
+			// For none autoscaler, it should not remove replicas
+			if modDeployment.Annotations[constants.AutoscalerClass] != string(constants.AutoscalerClassNone) {
+				modDeployment.Spec.Replicas = nil
+				curDeployment.Spec.Replicas = nil
 			}
 
-			originalDeployment.Spec.Replicas = nil
-			curJson, err := json.Marshal(originalDeployment)
+			curJson, err := json.Marshal(curDeployment)
 			if err != nil {
 				return nil, err
 			}
-			// To avoid the conflict between HPA and Deployment,
-			// we need to remove the Replicas field from the deployment spec
-			// For external autoscaler, it should not remove replicas
-			if deployment.Annotations[constants.AutoscalerClass] != string(constants.AutoscalerClassExternal) {
-				deployment.Spec.Replicas = nil
-			}
 
-			imagePullSecretsDesired := deployment.Spec.Template.Spec.ImagePullSecrets
-			originalDeploymentPullSecrets := originalDeployment.Spec.Template.Spec.ImagePullSecrets
-			imagePullSecretsToRemove := []string{}
-			for _, secret := range originalDeploymentPullSecrets {
-				found := false
-				for _, desiredSecret := range imagePullSecretsDesired {
-					if secret.Name == desiredSecret.Name {
-						found = true
-						break
-					}
-				}
-				if !found {
-					imagePullSecretsToRemove = append(imagePullSecretsToRemove, secret.Name)
-				}
-			}
-
-			modJson, err := json.Marshal(deployment)
+			modJson, err := json.Marshal(modDeployment)
 			if err != nil {
 				return nil, err
 			}
 
 			// Generate the strategic merge patch between the current and modified JSON
-			patchByte, err := strategicpatch.StrategicMergePatch(curJson, modJson, appsv1.Deployment{})
+			patchByte, err := strategicpatch.CreateTwoWayMergePatch(curJson, modJson, appsv1.Deployment{})
 			if err != nil {
 				return nil, err
 			}
 
 			// Patch the deployment object with the strategic merge patch
-			patchByte = []byte(strings.ReplaceAll(string(patchByte), "\"value\":\""+utils.PLACEHOLDER_FOR_DELETION+"\"", "\"$patch\":\"delete\""))
+			opErr = r.client.Patch(ctx, existingDep, kclient.RawPatch(types.StrategicMergePatchType, patchByte))
 
-			// The strategic merge patch does not remove items from list just by removing it from the patch,
-			// to delete lists items using strategic merge patch, the $patch delete pattern is used.
-			// Example:
-			// imagePullSecrets:
-			//   - "name": "pull-secret-1",
-			//     "$patch": "delete"
-			if len(imagePullSecretsToRemove) > 0 {
-				patchJson := map[string]interface{}{}
-				err = json.Unmarshal(patchByte, &patchJson)
-				if err != nil {
-					return nil, err
-				}
-				spec, ok := patchJson["spec"].(map[string]interface{})
-				if !ok {
-					return nil, errors.New("spec not found")
-				}
-				template, ok := spec["template"].(map[string]interface{})
-				if !ok {
-					return nil, errors.New("template not found")
-				}
-				specTemplate, ok := template["spec"].(map[string]interface{})
-				if !ok {
-					return nil, errors.New("template.spec not found")
-				}
-
-				// Ensure imagePullSecrets is a slice, defaulting to an empty slice if nil.
-				ipsField, exists := specTemplate["imagePullSecrets"]
-				var imagePullSecrets []interface{}
-				if exists && ipsField != nil {
-					var ok bool
-					imagePullSecrets, ok = ipsField.([]interface{})
-					if !ok {
-						return nil, errors.New("imagePullSecrets is not the expected type")
-					}
-				} else {
-					imagePullSecrets = []interface{}{}
-				}
-
-				for _, secret := range imagePullSecretsToRemove {
-					for _, secretMap := range imagePullSecrets {
-						if secretMap.(map[string]interface{})["name"] == secret {
-							secretMap.(map[string]interface{})["$patch"] = "delete"
-						}
-					}
-				}
-				patchJson["spec"].(map[string]interface{})["template"].(map[string]interface{})["spec"].(map[string]interface{})["imagePullSecrets"] = imagePullSecrets
-				patchByte, err = json.Marshal(patchJson)
-				if err != nil {
-					return nil, err
-				}
+		case constants.CheckResultDelete:
+			log.Info("Deleting deployment", "namespace", existingDep.Namespace, "name", existingDep.Name)
+			if existingDep.GetDeletionTimestamp() == nil { // check if the deployment was already deleted
+				opErr = r.client.Delete(ctx, existingDep)
 			}
-			opErr = r.client.Patch(context.TODO(), deployment, kclient.RawPatch(types.StrategicMergePatchType, patchByte))
 		}
 
 		if opErr != nil {

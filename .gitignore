@@ -40,7 +40,6 @@ venv/
 .ipynb_checkpoints
 
 .gitlab-ci.yml
-.openapi-generator-ignore
 .openapi-generator/
 
 # Ignore files for local deployment
@@ -78,3 +77,6 @@ istio-*
 test/scripts/openshift-ci/build*.log
 test/scripts/openshift-ci/setup*.log
 test/scripts/openshift-ci/run*.log
+
+# Generated Custom Certs
+test/scripts/openshift-ci/tls/certs
